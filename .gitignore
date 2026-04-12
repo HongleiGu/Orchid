@@ -1,0 +1,34 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# SQLite (local dev)
+*.db
+*.sqlite3
+
+# Docker persistent data
+backend/data/
+
+# Vault content (user data)
+vault/
+!vault/.orchid/
+
+# Node
+node_modules/
+frontend/.next/
+
+# IDE
+.vscode/
+.idea/
+
+backend/app/data/.gmail_tokens.json
+**/.gmail_tokens.json
+**/.orchid/
+**/*.db
+**/__pycache__/
+**/*.pyc

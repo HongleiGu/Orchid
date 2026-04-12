@@ -1,0 +1,10 @@
+{
+  "name": "orchid-skill-research-radar",
+  "version": "1.0.0",
+  "description": "Broad research direction spotting across arXiv, Semantic Scholar, HuggingFace, conference proceedings, and tech blogs",
+  "orchid": {
+    "type": "skill",
+    "runtime": "python",
+    "pythonDeps": ["httpx"]
+  }
+}

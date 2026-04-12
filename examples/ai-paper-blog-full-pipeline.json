@@ -1,0 +1,57 @@
+{
+  "agents": [
+    {
+      "name": "paper_scout",
+      "role": "worker",
+      "model": "openrouter/openai/gpt-4o-mini",
+      "system_prompt": "You are an AI research scout. Use your arxiv_papers skill to fetch the latest papers. For each paper, write a 1-2 sentence summary highlighting why it matters. Rank them by impact and novelty. Return a numbered list.",
+      "skills": ["@orchid/skill-arxiv-papers"]
+    },
+    {
+      "name": "paper_analyst",
+      "role": "worker",
+      "model": "openrouter/openai/gpt-4o-mini",
+      "system_prompt": "You are a deep research analyst. You receive a list of AI papers in previous_output. For each paper, use your in_depth_research skill to investigate it. Focus on: what problem it solves, key technical contribution, comparison to prior work, and practical implications. Return a structured analysis.",
+      "skills": ["@orchid/skill-in-depth-research"]
+    },
+    {
+      "name": "blog_writer",
+      "role": "worker",
+      "model": "openrouter/openai/gpt-4o-mini",
+      "system_prompt": "You are a skilled technical blog writer. You receive research analysis in previous_output. Produce a polished blog post with: a catchy title, TL;DR (3 bullets), a section per paper (what it does, why it matters, key insight), a 'What this means for practitioners' section, and a conclusion. Keep it under 1200 words. Use markdown. Tone: informative, no hype."
+    }
+  ],
+  "tasks": [
+    {
+      "name": "Stage 1: Fetch Papers",
+      "description": "Fetch the latest trending AI/ML papers from arXiv and HuggingFace.",
+      "workflow_type": "single",
+      "agent_name": "paper_scout"
+    },
+    {
+      "name": "Stage 2: Deep Research",
+      "description": "Take the paper list from previous_output and research each one in depth.",
+      "workflow_type": "single",
+      "agent_name": "paper_analyst"
+    },
+    {
+      "name": "Stage 3: Write Blog",
+      "description": "Take the research analysis from previous_output and write a polished blog post.",
+      "workflow_type": "single",
+      "agent_name": "blog_writer"
+    },
+    {
+      "name": "Daily AI Paper Blog (Pipeline)",
+      "description": "Full pipeline: fetch papers → deep research → write blog post. Each stage passes its output to the next.",
+      "workflow_type": "pipeline",
+      "workflow_config": {
+        "steps": [
+          {"task_name": "Stage 1: Fetch Papers", "params": {"topic": "AI agents and LLM"}},
+          {"task_name": "Stage 2: Deep Research"},
+          {"task_name": "Stage 3: Write Blog"}
+        ]
+      },
+      "cron_expr": "0 9 * * *"
+    }
+  ]
+}

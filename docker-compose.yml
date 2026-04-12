@@ -1,0 +1,89 @@
+services:
+  # ── Backend (FastAPI) ─────────────────────────────────────────────────────────
+  backend:
+    build: ./backend
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agentapp
+      REDIS_URL: redis://redis:6379/0
+      APP_CORS_ORIGINS: "http://localhost:${FRONTEND_PORT:-3000}"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      skill-runner:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./backend/data/packages:/app/data/packages
+      - ./vault:/app/vault
+      - ./examples:/app/examples:ro
+    restart: unless-stopped
+
+  # ── Skill Runner (sandbox for marketplace packages + bundled skills) ─────────
+  skill-runner:
+    build: ./backend/skill-runner
+    volumes:
+      - ./backend/data/packages/node_modules:/packages/node_modules:ro
+      - ./backend/app/skills/bundled:/bundled:ro
+      - ./vault:/vault
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # ── Frontend (Next.js) ────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: "http://localhost:${BACKEND_PORT:-8000}"
+        NEXT_PUBLIC_WS_URL: "ws://localhost:${BACKEND_PORT:-8000}"
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agentapp
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── Redis (pub/sub + cache) ───────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./backend/data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:

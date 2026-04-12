@@ -1,0 +1,36 @@
+{
+  "agents": [
+    {
+      "name": "coordinator",
+      "role": "orchestrator",
+      "model": "openrouter/openai/gpt-4o-mini",
+      "system_prompt": "You are a research coordinator. Use call_researcher to gather facts and call_writer to draft a response. When both have replied, produce a final answer and stop calling agents."
+    },
+    {
+      "name": "researcher",
+      "role": "worker",
+      "model": "openrouter/openai/gpt-4o-mini",
+      "system_prompt": "You are a factual researcher. Given a topic, search the web and return a structured list of key facts, statistics, and notable developments. Be thorough but concise.",
+      "tools": ["@orchid/web_search"]
+    },
+    {
+      "name": "writer",
+      "role": "worker",
+      "model": "openrouter/openai/gpt-4o-mini",
+      "system_prompt": "You are a skilled blog writer. Given research notes and a topic, produce a well-structured blog post with an engaging intro, clear sections, and a conclusion. Keep it under 500 words."
+    }
+  ],
+  "tasks": [
+    {
+      "name": "Write AI agents blog post",
+      "description": "Research and write a short blog post about multi-agent AI frameworks in 2025.",
+      "workflow_type": "group",
+      "workflow_config": {
+        "orchestrator_name": "coordinator",
+        "worker_names": ["researcher", "writer"],
+        "max_turns_per_agent": 3,
+        "max_total_turns": 10
+      }
+    }
+  ]
+}

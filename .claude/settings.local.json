@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(conda run:*)",
+      "Bash(npx create-next-app@latest frontend --typescript --tailwind --eslint --app --src-dir --no-import-alias --use-pnpm --turbopack)",
+      "Bash(pnpm create:*)",
+      "Bash(pnpm add:*)",
+      "Bash(pnpm build:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker volume:*)",
+      "Bash(docker rm:*)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "WebFetch(domain:clawhub.ai)",
+      "WebFetch(domain:developer.work.weixin.qq.com)",
+      "WebSearch",
+      "WebFetch(domain:developers.weixin.qq.com)",
+      "Bash(ls -d d:/Desktop/study/projects/housekeepai/examples/skill-*/)",
+      "Bash(cp -r d:/Desktop/study/projects/housekeepai/examples/skill-weather d:/Desktop/study/projects/housekeepai/backend/app/skills/bundled/)",
+      "Bash(cp -r d:/Desktop/study/projects/housekeepai/examples/skill-arxiv-papers d:/Desktop/study/projects/housekeepai/backend/app/skills/bundled/)",
+      "Bash(cp -r d:/Desktop/study/projects/housekeepai/examples/skill-in-depth-research d:/Desktop/study/projects/housekeepai/backend/app/skills/bundled/)",
+      "Bash(cp -r d:/Desktop/study/projects/housekeepai/examples/skill-research-radar d:/Desktop/study/projects/housekeepai/backend/app/skills/bundled/)",
+      "WebFetch(domain:www.semanticscholar.org)",
+      "WebFetch(domain:docs.openalex.org)",
+      "WebFetch(domain:dblp.org)",
+      "WebFetch(domain:aclanthology.org)",
+      "WebFetch(domain:api.crossref.org)",
+      "WebFetch(domain:developers.openalex.org)",
+      "WebFetch(domain:api.semanticscholar.org)",
+      "WebFetch(domain:semanticscholar.readthedocs.io)",
+      "WebFetch(domain:www.crossref.org)",
+      "WebFetch(domain:raw.clawhub.ai)"
+    ]
+  }
+}

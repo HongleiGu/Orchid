@@ -1,0 +1,9 @@
+{
+  "name": "orchid-skill-weather",
+  "version": "1.0.0",
+  "description": "Fetch current weather for a location using wttr.in",
+  "orchid": {
+    "type": "skill",
+    "runtime": "python"
+  }
+}
