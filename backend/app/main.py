@@ -76,11 +76,16 @@ async def lifespan(app: FastAPI):
     from app.ws.manager import ws_manager
     await ws_manager.startup()
 
-    # 8. Start scheduler
+    # 8. Start the run consumer (single sequential queue worker).
+    #    Also recovers any runs left in `running` from a previous crash.
+    from app.executor.run_executor import start_consumer
+    await start_consumer()
+
+    # 9. Start scheduler
     from app.scheduler.service import startup as scheduler_startup
     await scheduler_startup()
 
-    # 9. Re-register marketplace proxies from DB
+    # 10. Re-register marketplace proxies from DB
     from app.marketplace.service import marketplace
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
@@ -92,6 +97,9 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ──────────────────────────────────────────────────────────────
     from app.scheduler.service import shutdown as scheduler_shutdown
     await scheduler_shutdown()
+
+    from app.executor.run_executor import stop_consumer
+    await stop_consumer()
 
     from app.ws.manager import ws_manager
     await ws_manager.shutdown()

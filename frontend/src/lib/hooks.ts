@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import type { AgentCreate, SecretUpdate, TaskCreate } from "./types";
+import type { AgentCreate, BatchTriggerItem, SecretUpdate, TaskCreate, TriggerOptions } from "./types";
 
 // ── Agents ───────────────────────────────────────────────────────────────────
 
@@ -83,8 +83,20 @@ export function useDeleteTask() {
 export function useTriggerTask() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, params }: { id: string; params?: Record<string, unknown> }) =>
-      api.tasks.trigger(id, params),
+    mutationFn: ({ id, ...options }: { id: string } & TriggerOptions) =>
+      api.tasks.trigger(id, options),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["runs"] });
+    },
+  });
+}
+
+export function useTriggerTaskBatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, runs }: { id: string; runs: BatchTriggerItem[] }) =>
+      api.tasks.triggerBatch(id, runs),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tasks"] });
       qc.invalidateQueries({ queryKey: ["runs"] });

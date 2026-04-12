@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -28,7 +28,14 @@ class Task(Base):
         String(26), ForeignKey("agents.id", ondelete="SET NULL")
     )
     inputs: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Optional list of input field definitions for UI form rendering and docs.
+    # Shape: [{"name": str, "type": "string"|"number"|"boolean"|"json",
+    #          "label"?: str, "description"?: str, "required"?: bool,
+    #          "default"?: any, "options"?: [str]}]
+    input_schema: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     cron_expr: Mapped[str | None] = mapped_column(String(64))
+    # Default priority for runs of this task; manual triggers can override per-call.
+    default_priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="idle")
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(

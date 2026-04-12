@@ -28,7 +28,15 @@
       "WebFetch(domain:api.semanticscholar.org)",
       "WebFetch(domain:semanticscholar.readthedocs.io)",
       "WebFetch(domain:www.crossref.org)",
-      "WebFetch(domain:raw.clawhub.ai)"
+      "WebFetch(domain:raw.clawhub.ai)",
+      "Read(//c/Users/hongl/.claude/projects/**)",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\), f\\) for f in ['backend/app/executor/run_executor.py', 'backend/app/api/v1/tasks.py', 'backend/app/api/v1/runs.py', 'backend/app/api/v1/config.py', 'backend/app/scheduler/service.py', 'backend/app/db/models/run.py', 'backend/app/db/models/task.py', 'backend/app/main.py', 'alembic/versions/0001_priority_queue.py']]; print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\), f\\) for f in ['backend/app/api/v1/tasks.py', 'backend/app/api/v1/config.py', 'backend/app/db/models/task.py', 'backend/app/executor/run_executor.py', 'alembic/versions/0001_priority_queue.py']]; print\\('PY OK'\\)\")",
+      "Bash(pnpm exec:*)",
+      "Read(//d/Desktop/study/projects/Orchid/frontend/node_modules/**)",
+      "Bash(ls \"d:/Desktop/study/projects/Orchid/examples/\"*.json)",
+      "Bash(python -c \"import json; [json.load\\(open\\(f, encoding='utf-8'\\)\\) for f in ['examples/ai-paper-blog-full-pipeline.json', 'examples/professor-research-pipeline.json', 'examples/auto-research-pipeline.json']]; print\\('JSON OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/agent.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ]
   }
 }

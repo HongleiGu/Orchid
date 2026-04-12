@@ -104,8 +104,14 @@ async def cancel_run(run_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(409, f"Run is already {run.status}")
 
     from app.executor.run_executor import cancel_run as _cancel
+    was_pending = run.status == "pending"
     cancelled = await _cancel(run_id)
-    status = "cancelling" if cancelled else run.status
+    if not cancelled:
+        # Race: status changed between the read and the cancel call.
+        await db.refresh(run)
+        return DataResponse(data=CancelOut(run_id=run_id, status=run.status))
+    # Pending → cancelled is synchronous (DB flip); running → cancelling is async.
+    status = "cancelled" if was_pending else "cancelling"
     return DataResponse(data=CancelOut(run_id=run_id, status=status))
 
 

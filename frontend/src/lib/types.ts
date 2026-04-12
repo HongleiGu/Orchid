@@ -42,6 +42,20 @@ export interface AgentCreate {
   reasoning?: boolean;
 }
 
+export type InputFieldType = "string" | "number" | "boolean" | "json";
+
+export interface InputField {
+  name: string;
+  type: InputFieldType;
+  label?: string;
+  description?: string;
+  required?: boolean;
+  default?: unknown;
+  options?: string[]; // for type="string" with a fixed set of choices
+}
+
+export type InputSchema = InputField[];
+
 export interface Task {
   id: string;
   name: string;
@@ -50,7 +64,9 @@ export interface Task {
   workflow_config: Record<string, unknown>;
   agent_id: string | null;
   inputs: Record<string, unknown>;
+  input_schema: InputSchema;
   cron_expr: string | null;
+  default_priority: number;
   status: "idle" | "scheduled" | "running" | "done" | "failed";
   last_run_at: string | null;
   created_at: string;
@@ -64,7 +80,20 @@ export interface TaskCreate {
   workflow_config?: Record<string, unknown>;
   agent_id?: string | null;
   inputs?: Record<string, unknown>;
+  input_schema?: InputSchema;
   cron_expr?: string | null;
+  default_priority?: number;
+}
+
+export interface TriggerOptions {
+  params?: Record<string, unknown>;
+  priority?: number;
+  force?: boolean;
+}
+
+export interface BatchTriggerItem {
+  params?: Record<string, unknown>;
+  priority?: number;
 }
 
 export interface RunEvent {

@@ -77,7 +77,24 @@
           {"task_name": "Research: Design Experiments"},
           {"task_name": "Research: Generate Code"}
         ]
-      }
+      },
+      "input_schema": [
+        {
+          "name": "field",
+          "type": "string",
+          "label": "Research field",
+          "description": "Field or sub-area to scan. Examples: 'efficient transformer attention', 'multimodal RAG', 'world models for robotics'.",
+          "required": true
+        },
+        {
+          "name": "depth",
+          "type": "string",
+          "label": "Scan depth",
+          "description": "How aggressively to explore. 'exploratory' = wide net; 'focused' = stay close to the stated field.",
+          "default": "exploratory",
+          "options": ["exploratory", "focused"]
+        }
+      ]
     }
   ]
 }

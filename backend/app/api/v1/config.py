@@ -37,6 +37,7 @@ class AgentConfig(BaseModel):
     tools: list[str] = []
     skills: list[str] = []
     memory_strategy: str = "none"
+    reasoning: bool = False
 
 
 class TaskConfig(BaseModel):
@@ -47,7 +48,9 @@ class TaskConfig(BaseModel):
     # For single-agent tasks, reference by agent name (resolved on import)
     agent_name: str | None = None
     inputs: dict = {}
+    input_schema: list = []
     cron_expr: str | None = None
+    default_priority: int = 0
 
 
 class PipelineConfig(BaseModel):
@@ -90,6 +93,7 @@ async def export_config(db: AsyncSession = Depends(get_db)):
             tools=list(a.tools or []),
             skills=list(a.skills or []),
             memory_strategy=a.memory_strategy,
+            reasoning=a.reasoning,
         )
         for a in agents_orm
     ]
@@ -101,7 +105,9 @@ async def export_config(db: AsyncSession = Depends(get_db)):
             description=t.description,
             workflow_type=t.workflow_type,
             inputs=t.inputs or {},
+            input_schema=list(t.input_schema or []),
             cron_expr=t.cron_expr,
+            default_priority=t.default_priority or 0,
         )
 
         # Resolve agent IDs to names in workflow_config
@@ -224,6 +230,7 @@ async def _do_import(body: PipelineConfig, db: AsyncSession) -> ImportResult:
             tools=ac.tools,
             skills=ac.skills,
             memory_strategy=ac.memory_strategy,
+            reasoning=ac.reasoning,
         ))
         name_to_id[ac.name] = agent_id
         agents_created += 1
@@ -300,7 +307,9 @@ async def _do_import(body: PipelineConfig, db: AsyncSession) -> ImportResult:
             workflow_config=workflow_config,
             agent_id=agent_id,
             inputs=tc.inputs,
+            input_schema=tc.input_schema,
             cron_expr=tc.cron_expr,
+            default_priority=tc.default_priority,
         ))
         tasks_created += 1
 

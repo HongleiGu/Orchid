@@ -28,7 +28,9 @@ class TaskOut(BaseModel):
     workflow_config: dict
     agent_id: str | None
     inputs: dict
+    input_schema: list
     cron_expr: str | None
+    default_priority: int
     status: str
     last_run_at: datetime | None
     created_at: datetime
@@ -44,7 +46,9 @@ class TaskCreate(BaseModel):
     workflow_config: dict = {}
     agent_id: str | None = None
     inputs: dict = {}
+    input_schema: list = []
     cron_expr: str | None = None
+    default_priority: int = 0
 
 
 class TaskUpdate(BaseModel):
@@ -54,16 +58,38 @@ class TaskUpdate(BaseModel):
     workflow_config: dict | None = None
     agent_id: str | None = None
     inputs: dict | None = None
+    input_schema: list | None = None
     cron_expr: str | None = None
+    default_priority: int | None = None
 
 
 class TriggerBody(BaseModel):
     params: dict = {}  # runtime params merged with task.inputs
+    # Higher = runs sooner. None = inherit task.default_priority.
+    priority: int | None = None
+    # Bypass the "already pending/running" idempotency check.
+    force: bool = False
 
 
 class TriggerOut(BaseModel):
     run_id: str
     task_id: str
+    status: str = "pending"
+    priority: int = 0
+
+
+class BatchRunItem(BaseModel):
+    params: dict = {}
+    priority: int | None = None  # falls back to task.default_priority
+
+
+class BatchTriggerBody(BaseModel):
+    runs: list[BatchRunItem]
+
+
+class BatchTriggerOut(BaseModel):
+    task_id: str
+    run_ids: list[str]
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -153,21 +179,77 @@ async def trigger_task(
     task = await db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if task.status == "running":
-        raise HTTPException(409, "Task already running")
 
-    from datetime import timezone
-    from app.executor.run_executor import submit_run
+    body = body or TriggerBody()
 
-    # Merge runtime params with task defaults
-    runtime_params = (body.params if body else {}) or {}
+    if not body.force:
+        existing = await db.execute(
+            select(Run.id)
+            .where(Run.task_id == task_id, Run.status.in_(("pending", "running")))
+            .limit(1)
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                409, "Task already has a pending or running run (use force=true to override)"
+            )
+
+    from app.executor.run_executor import notify_new_run
+
+    priority = body.priority if body.priority is not None else (task.default_priority or 0)
+    runtime_params = body.params or {}
 
     run_id = str(ULID())
-    run = Run(id=run_id, task_id=task_id, agent_id=task.agent_id)
-    db.add(run)
-    task.status = "running"
-    task.last_run_at = datetime.now(timezone.utc)
+    db.add(Run(
+        id=run_id,
+        task_id=task_id,
+        agent_id=task.agent_id,
+        status="pending",
+        priority=priority,
+        runtime_params=runtime_params,
+    ))
     await db.commit()
 
-    await submit_run(task_id, run_id, runtime_params=runtime_params)
-    return DataResponse(data=TriggerOut(run_id=run_id, task_id=task_id))
+    notify_new_run()
+    return DataResponse(data=TriggerOut(
+        run_id=run_id, task_id=task_id, status="pending", priority=priority,
+    ))
+
+
+@router.post("/{task_id}/trigger/batch", response_model=DataResponse[BatchTriggerOut])
+async def trigger_task_batch(
+    task_id: str,
+    body: BatchTriggerBody,
+    db: AsyncSession = Depends(get_db),
+):
+    """Enqueue many runs for the same task, executed in array order.
+
+    Bypasses the single-pending-run idempotency check by design — the whole
+    point of a batch is to queue several runs for the same task.
+    """
+    if not body.runs:
+        raise HTTPException(400, "runs must be non-empty")
+
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+
+    from app.executor.run_executor import notify_new_run
+
+    default_prio = task.default_priority or 0
+    run_ids: list[str] = []
+    for item in body.runs:
+        prio = item.priority if item.priority is not None else default_prio
+        run_id = str(ULID())
+        db.add(Run(
+            id=run_id,
+            task_id=task_id,
+            agent_id=task.agent_id,
+            status="pending",
+            priority=prio,
+            runtime_params=item.params or {},
+        ))
+        run_ids.append(run_id)
+    await db.commit()
+
+    notify_new_run()
+    return DataResponse(data=BatchTriggerOut(task_id=task_id, run_ids=run_ids))

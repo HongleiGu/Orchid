@@ -167,10 +167,14 @@ class LLMAgent(BaseAgent):
                 agent=self.name,
                 payload={"content": f"[Reasoning]\n{think_response.content}", "tool_calls": 0},
             ))
-            # Inject reasoning as context for the execution pass
-            history.append(Message(role="user", content=user_message))
-            history.append(Message(role="assistant", content=f"[My reasoning]\n{think_response.content}\n\n[Now executing]"))
-            first_turn = False
+            # Inject reasoning into the user message so the conversation starts
+            # with one user turn. Faking an assistant turn here breaks providers
+            # (e.g. Anthropic via Azure) that reject histories ending in assistant.
+            user_message = (
+                f"{user_message}\n\n"
+                f"---\n[Your prior planning notes]\n{think_response.content}\n"
+                f"---\nNow execute the task."
+            )
 
         while steps < max_steps:
             # Check budget before each LLM call

@@ -17,6 +17,10 @@ class Run(Base):
     )
     agent_id: Mapped[str | None] = mapped_column(String(26))
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    # Higher = runs sooner. Ties broken by created_at ASC.
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Runtime params merged with task.inputs at execution time.
+    runtime_params: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     model_used: Mapped[str | None] = mapped_column(String(128))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

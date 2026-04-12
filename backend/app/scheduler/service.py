@@ -40,9 +40,7 @@ async def _reload_cron_jobs() -> None:
     from sqlalchemy import select
 
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(Task).where(Task.cron_expr.isnot(None), Task.status != "running")
-        )
+        result = await db.execute(select(Task).where(Task.cron_expr.isnot(None)))
         tasks = result.scalars().all()
 
     for task in tasks:
@@ -72,23 +70,44 @@ def unschedule_task(task_id: str) -> None:
 
 
 async def _trigger_task(task_id: str) -> None:
-    """Called by APScheduler — creates a Run row and submits it."""
+    """Called by APScheduler — enqueues a pending Run for the consumer.
+
+    Skips enqueueing if the task already has a pending or running run, so
+    overlapping cron fires don't stack up.
+    """
+    from sqlalchemy import select
     from ulid import ULID
     from app.db.session import AsyncSessionLocal
     from app.db.models.task import Task
     from app.db.models.run import Run
-    from app.executor.run_executor import submit_run
+    from app.executor.run_executor import notify_new_run
 
-    run_id = str(ULID())
     async with AsyncSessionLocal() as db:
         task = await db.get(Task, task_id)
         if task is None:
             logger.warning("Scheduled trigger: task %s not found", task_id)
             return
-        db.add(Run(id=run_id, task_id=task_id, agent_id=task.agent_id))
-        task.last_run_at = datetime.now(timezone.utc)
-        task.status = "running"
+
+        existing = await db.execute(
+            select(Run.id)
+            .where(Run.task_id == task_id, Run.status.in_(("pending", "running")))
+            .limit(1)
+        )
+        if existing.scalar_one_or_none():
+            logger.info(
+                "Scheduler skipping task %s — a pending/running run already exists", task_id
+            )
+            return
+
+        run_id = str(ULID())
+        db.add(Run(
+            id=run_id,
+            task_id=task_id,
+            agent_id=task.agent_id,
+            status="pending",
+            priority=task.default_priority or 0,
+        ))
         await db.commit()
 
-    await submit_run(task_id, run_id)
-    logger.info("Scheduler triggered run %s for task %s", run_id, task_id)
+    notify_new_run()
+    logger.info("Scheduler enqueued run %s for task %s", run_id, task_id)

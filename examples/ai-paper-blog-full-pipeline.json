@@ -46,11 +46,22 @@
       "workflow_type": "pipeline",
       "workflow_config": {
         "steps": [
-          {"task_name": "Stage 1: Fetch Papers", "params": {"topic": "AI agents and LLM"}},
+          {"task_name": "Stage 1: Fetch Papers"},
           {"task_name": "Stage 2: Deep Research"},
           {"task_name": "Stage 3: Write Blog"}
         ]
       },
+      "inputs": {"topic": "AI agents and LLM"},
+      "input_schema": [
+        {
+          "name": "topic",
+          "type": "string",
+          "label": "Research topic",
+          "description": "Topic to fetch papers about. Examples: 'diffusion models', 'RLHF', 'multi-agent LLM frameworks'.",
+          "required": true,
+          "default": "AI agents and LLM"
+        }
+      ],
       "cron_expr": "0 9 * * *"
     }
   ]

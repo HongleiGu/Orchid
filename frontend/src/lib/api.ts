@@ -1,6 +1,7 @@
 import type {
   Agent,
   AgentCreate,
+  BatchTriggerItem,
   DataResponse,
   ModelInfo,
   PageResponse,
@@ -10,6 +11,7 @@ import type {
   SecretUpdate,
   Task,
   TaskCreate,
+  TriggerOptions,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -66,10 +68,22 @@ export const api = {
       }),
     delete: (id: string) =>
       apiFetch<void>(`/api/v1/tasks/${id}`, { method: "DELETE" }),
-    trigger: (id: string, params?: Record<string, unknown>) =>
-      apiFetch<DataResponse<{ run_id: string; task_id: string }>>(
+    trigger: (id: string, options: TriggerOptions = {}) =>
+      apiFetch<DataResponse<{ run_id: string; task_id: string; status: string; priority: number }>>(
         `/api/v1/tasks/${id}/trigger`,
-        { method: "POST", body: JSON.stringify({ params: params ?? {} }) }
+        {
+          method: "POST",
+          body: JSON.stringify({
+            params: options.params ?? {},
+            priority: options.priority ?? null,
+            force: options.force ?? false,
+          }),
+        }
+      ),
+    triggerBatch: (id: string, runs: BatchTriggerItem[]) =>
+      apiFetch<DataResponse<{ task_id: string; run_ids: string[] }>>(
+        `/api/v1/tasks/${id}/trigger/batch`,
+        { method: "POST", body: JSON.stringify({ runs }) }
       ),
   },
 

@@ -73,7 +73,23 @@
           {"task_name": "Prof: Compile Report"},
           {"task_name": "Prof: Save & Send"}
         ]
-      }
+      },
+      "input_schema": [
+        {
+          "name": "professors",
+          "type": "string",
+          "label": "Professors",
+          "description": "Comma- or newline-separated list of professor names (and optionally universities). Example: 'Yann LeCun (NYU), Geoffrey Hinton (UofT)'.",
+          "required": true
+        },
+        {
+          "name": "year_from",
+          "type": "number",
+          "label": "Earliest publication year",
+          "description": "Only consider papers published this year or later. Default 2024.",
+          "default": 2024
+        }
+      ]
     }
   ]
 }

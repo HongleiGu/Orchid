@@ -1,15 +1,17 @@
 """
-RunExecutor — the single adapter between the DB/API layer and the core engines.
+RunExecutor — adapter between DB/API and the core engines, plus the strict
+sequential queue consumer.
 
-Responsibilities
-----------------
-1. Load Task + Agent config from DB.
-2. Resolve tool / skill names → instances from registries.
-3. Assemble a DAGDefinition or CollabGroup from workflow_config.
-4. Execute via DAGExecutor or GroupExecutor.
-5. Stream RunEventData → DB (RunEvent rows) + WebSocket via ws_manager.
-6. Update Run.status / Run.result on completion or failure.
-7. Support cancellation via asyncio.Task.cancel().
+Queue model
+-----------
+- Runs are inserted as `status="pending"` rows by the API or scheduler.
+- A single consumer (started in main.py lifespan) claims the highest-priority
+  oldest pending row, executes it, then loops.
+- `notify_new_run()` wakes the consumer immediately on insert; otherwise it
+  polls every 2s.
+- Cancellation works for both pending (DB flip) and running (asyncio.cancel)
+  states.
+- Crash recovery on startup marks any `status="running"` rows as failed.
 """
 from __future__ import annotations
 
@@ -36,32 +38,152 @@ from app.tools.registry import tool_registry
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# run_id → asyncio.Task (for cancellation)
-_active_runs: dict[str, asyncio.Task] = {}
+# ── Consumer state ────────────────────────────────────────────────────────────
+# Single consumer task; only one run executes at a time.
+_wakeup: asyncio.Event = asyncio.Event()
+_consumer_task: asyncio.Task | None = None
+_current: tuple[str, asyncio.Task] | None = None  # (run_id, task)
+_shutdown: bool = False
+_POLL_INTERVAL = 2.0
+
+
+def notify_new_run() -> None:
+    """Called by API/scheduler after inserting a pending Run row."""
+    _wakeup.set()
 
 
 def get_active_run_ids() -> list[str]:
-    return list(_active_runs.keys())
-
-
-async def submit_run(
-    task_id: str, run_id: str, runtime_params: dict | None = None
-) -> asyncio.Task:
-    """Create and register an asyncio background task for a run."""
-    task = asyncio.create_task(
-        _run_wrapper(task_id, run_id, runtime_params or {}), name=f"run-{run_id}"
-    )
-    _active_runs[run_id] = task
-    task.add_done_callback(lambda _: _active_runs.pop(run_id, None))
-    return task
+    return [_current[0]] if _current else []
 
 
 async def cancel_run(run_id: str) -> bool:
-    task = _active_runs.get(run_id)
-    if task and not task.done():
-        task.cancel()
+    """Cancel a pending or running run.
+
+    - Pending: flip the DB row to `cancelled`.
+    - Running (current): cancel the asyncio task; the wrapper writes the final state.
+    """
+    if _current and _current[0] == run_id:
+        task = _current[1]
+        if not task.done():
+            task.cancel()
+            return True
+        return False
+
+    async with AsyncSessionLocal() as db:
+        run = await db.get(Run, run_id)
+        if run is None or run.status != "pending":
+            return False
+        run.status = "cancelled"
+        run.finished_at = datetime.now(timezone.utc)
+        await db.commit()
         return True
-    return False
+
+
+# ── Lifecycle ─────────────────────────────────────────────────────────────────
+
+async def start_consumer() -> None:
+    """Start the queue consumer. Call once from app startup."""
+    global _consumer_task, _shutdown
+    if _consumer_task is not None and not _consumer_task.done():
+        return
+    _shutdown = False
+    await _recover_interrupted_runs()
+    _consumer_task = asyncio.create_task(_consumer_loop(), name="run-consumer")
+    logger.info("Run consumer started")
+
+
+async def stop_consumer() -> None:
+    """Stop the consumer gracefully. Cancels the in-flight run if any."""
+    global _shutdown
+    _shutdown = True
+    _wakeup.set()
+    if _current and not _current[1].done():
+        _current[1].cancel()
+    if _consumer_task is not None:
+        try:
+            await _consumer_task
+        except asyncio.CancelledError:
+            pass
+    logger.info("Run consumer stopped")
+
+
+async def _recover_interrupted_runs() -> None:
+    """Mark any runs left in `running` (from a previous crash) as failed,
+    and reset Task.status accordingly."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Run).where(Run.status == "running"))
+        stuck = result.scalars().all()
+        now = datetime.now(timezone.utc)
+        for run in stuck:
+            run.status = "failed"
+            run.error = "Interrupted by server restart"
+            run.finished_at = now
+            task = await db.get(Task, run.task_id)
+            if task and task.status == "running":
+                task.status = "idle"
+        if stuck:
+            logger.warning("Recovered %d interrupted run(s) on startup", len(stuck))
+        await db.commit()
+
+
+# ── Consumer loop ─────────────────────────────────────────────────────────────
+
+async def _consumer_loop() -> None:
+    global _current
+    while not _shutdown:
+        run_info = await _claim_next()
+        if run_info is None:
+            try:
+                await asyncio.wait_for(_wakeup.wait(), timeout=_POLL_INTERVAL)
+            except asyncio.TimeoutError:
+                pass
+            _wakeup.clear()
+            continue
+
+        run_id, task_id, runtime_params = run_info
+        task = asyncio.create_task(
+            _run_wrapper(task_id, run_id, runtime_params), name=f"run-{run_id}"
+        )
+        _current = (run_id, task)
+        try:
+            await task
+        except asyncio.CancelledError:
+            # Wrapper handles its own cleanup on cancel; nothing to do here.
+            pass
+        except Exception:
+            # Wrapper already logged + persisted the failure.
+            pass
+        finally:
+            _current = None
+
+
+async def _claim_next() -> tuple[str, str, dict] | None:
+    """Atomically pick the next pending run and mark it running.
+
+    With a single consumer there's no contention — no row-level lock needed.
+    Returns (run_id, task_id, runtime_params) or None if queue is empty.
+    """
+    async with AsyncSessionLocal() as db:
+        # ULID `id` is the tiebreaker — it's time-sortable, so batch-inserted
+        # rows with identical created_at still execute in insertion order.
+        result = await db.execute(
+            select(Run)
+            .where(Run.status == "pending")
+            .order_by(Run.priority.desc(), Run.created_at.asc(), Run.id.asc())
+            .limit(1)
+        )
+        run = result.scalar_one_or_none()
+        if run is None:
+            return None
+
+        run.status = "running"
+        run.started_at = datetime.now(timezone.utc)
+        task = await db.get(Task, run.task_id)
+        if task:
+            task.status = "running"
+            task.last_run_at = run.started_at
+        await db.commit()
+        return run.id, run.task_id, dict(run.runtime_params or {})
 
 
 # ── Internal ──────────────────────────────────────────────────────────────────
