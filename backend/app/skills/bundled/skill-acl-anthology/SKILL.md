@@ -1,6 +1,6 @@
 ---
 name: acl_anthology
-description: Search ACL Anthology for NLP/CL conference papers (ACL, EMNLP, NAACL, EACL, CoNLL, etc). Uses the ACL Anthology GitHub data API.
+description: ACL/EMNLP/NAACL/EACL/CoNLL papers only. Use when the topic is squarely NLP or computational linguistics; for broader CS or cross-field work prefer dblp or openalex.
 parameters:
   type: object
   properties:

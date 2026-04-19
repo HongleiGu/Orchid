@@ -22,6 +22,8 @@ services:
       - ./backend/data/packages:/app/data/packages
       - ./vault:/app/vault
       - ./examples:/app/examples:ro
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini:ro
     restart: unless-stopped
 
   # ── Skill Runner (sandbox for marketplace packages + bundled skills) ─────────

@@ -1,0 +1,135 @@
+{
+  "agents": [
+    {
+      "name": "story_writer",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": true,
+      "system_prompt": "You write illustrated bedtime stories for children. You receive these parameters in Task parameters:\n- theme: story concept\n- age_range: target age (e.g. '4-6', '6-8')\n- num_scenes: how many illustrated scenes\n- style_hint: shared visual style\n\nThe images are generated in a SINGLE call by a sequential-consistency image model, so you must produce ONE combined visual prompt that lists all scenes with a shared style+character prefix.\n\nProduce a single JSON object with EXACTLY this shape — no prose before or after, no markdown fences:\n\n{\n  \"title\": \"...\",\n  \"visual_prompt\": \"<SHARED_PREFIX>\\nScene 1: <...>\\nScene 2: <...>\\n... up to Scene N.\",\n  \"scenes\": [\n    {\"text\": \"2-3 sentences of story text for scene 1, age-appropriate, gentle tone\"},\n    {\"text\": \"...\"},\n    ... exactly num_scenes entries\n  ]\n}\n\nSHARED_PREFIX format (copy style_hint if given):\n  \"A whimsical children's storybook illustration in <style>. Warm, inviting mood, consistent hand-painted texture, gentle lighting. Main character: <name>, <2-3 specific visual traits — hair color, clothing, distinctive features>. Secondary character (if any): <same>. Maintain consistent character design, art style, and color palette across all images.\"\n\nRules:\n- Number of Scene N entries in visual_prompt MUST equal num_scenes AND equal len(scenes).\n- Each Scene N line: specific action + setting + lighting/mood. ~25-40 words per scene.\n- Story arc: gentle setup → tiny challenge → warm resolution → calming closing. No scary content.\n- scenes[i].text is the STORY TEXT (what the parent reads), NOT the image description.\n- Output ONLY the JSON object."
+    },
+    {
+      "name": "scene_illustrator",
+      "role": "worker",
+      "model": "openrouter/openai/gpt-4o-mini",
+      "tools": ["@orchid/replicate_generate_images"],
+      "system_prompt": "You generate illustrations for a bedtime story. previous_output is a JSON object:\n\n{\n  \"title\": \"...\",\n  \"visual_prompt\": \"<shared prefix>\\nScene 1: ...\\nScene 2: ...\",\n  \"scenes\": [{\"text\": \"...\"}, ...]\n}\n\nImage generation settings come from Task parameters (not previous_output):\n  aspect_ratio, size, vault_project, num_scenes\n\nCall orchid__replicate_generate_images EXACTLY ONCE with:\n  prompt = visual_prompt verbatim\n  max_images = the `num_scenes` task parameter (integer)\n  aspect_ratio = the `aspect_ratio` task parameter\n  size = the `size` task parameter\n  vault_project = the `vault_project` task parameter\n  output_format = \"png\"\n  filename_prefix = a short slug of the title (lowercase, dashes)\n\nThe tool returns JSON with {count, images: [{index, vault_path, remote_url}, ...]}. Then output ONE final JSON object (no tool call after this):\n\n{\n  \"title\": \"...\",\n  \"scenes\": [\n    {\"text\": \"scene 1 text\", \"vault_path\": \"<from tool result>\", \"remote_url\": \"<from tool result>\"},\n    ...\n  ]\n}\n\nPair scenes with images by 1-based index. Include BOTH vault_path and remote_url per scene verbatim from the tool result. If fewer images than scenes came back, set both to null for the missing ones.\nDo NOT call the tool more than once. Output ONLY the final JSON, no markdown fences."
+    },
+    {
+      "name": "distributor",
+      "role": "worker",
+      "model": "openrouter/openai/gpt-4o-mini",
+      "tools": ["@orchid/vault_write", "@orchid/gmail_send", "@orchid/wechat_publish"],
+      "system_prompt": "You save + deliver an illustrated bedtime story. previous_output is a JSON object:\n\n{\n  \"title\": \"...\",\n  \"scenes\": [{\"text\": \"...\", \"vault_path\": \"...\", \"remote_url\": \"...\"}, ...]\n}\n\nDelivery settings come from Task parameters (not previous_output):\n  email_to: empty string means skip email\n  also_wechat: boolean, false means skip WeChat\n  vault_project: where to save the markdown\n\n# Step 1 — Build markdown body\n\nUse the REMOTE URL for image src (the Replicate CDN link), not the vault path:\n\n# <title>\n\n**Scene 1**\n\n<scene 1 text>\n\n![Scene 1](<scene 1 remote_url>)\n\n---\n\n**Scene 2**\n\n<scene 2 text>\n\n![Scene 2](<scene 2 remote_url>)\n\n... repeat for every scene. If remote_url is null, omit the image line but keep the text. End with a blank line.\n\n# Step 2 — ALWAYS save to vault (this runs regardless of delivery config)\n\nCall orchid__vault_write with:\n  project = the `vault_project` task parameter (default 'bedtime-stories')\n  filename = a short lowercase-dashed slug of the title (e.g. 'luna-and-the-night-fox')\n  content = the markdown from Step 1\n  tags = \"bedtime,story,illustrated\"\n\n# Step 3 — Email (ONLY if the `email_to` task parameter is a non-empty string)\n\nRead email_to from the Task parameters. If it's empty, missing, or literally 'example@example.com', SKIP this step. Otherwise call orchid__gmail_send with:\n  to = the EXACT `email_to` task parameter value (never substitute a placeholder)\n  subject = \"Bedtime story — <title>\"\n  body = the markdown from Step 1\n  attachments = comma-separated vault_paths of every scene image from previous_output (skip null ones). These become file attachments so the recipient also has local copies.\n\n# Step 4 — WeChat draft (ONLY if the `also_wechat` task parameter is true)\n\nIf false/missing, SKIP. Otherwise call orchid__wechat_publish with:\n  title = <title>\n  content = the same markdown body as Step 1 (uses remote URLs, WeChat will render them)\n  author = \"Orchid\"\n  publish = false\n\n# Final message\n\nAfter tool calls, emit a one-line summary like: 'Saved story \\'<title>\\' to vault. Emailed to X. Published WeChat draft.' — include only the actions that actually ran.\n\nCRITICAL RULES:\n- Step 2 (vault save) MUST ALWAYS run, even when both delivery toggles are off.\n- Use the EXACT email_to value from task parameters. Never invent or substitute 'example@example.com' or any placeholder — if it's empty, skip the email step entirely.\n- Use remote_url in markdown image src, not vault_path. vault_path is only for email attachments."
+    }
+  ],
+  "tasks": [
+    {
+      "name": "Bedtime: Draft Story",
+      "description": "Write a bedtime story draft with a combined visual prompt and per-scene text.",
+      "workflow_type": "single",
+      "agent_name": "story_writer"
+    },
+    {
+      "name": "Bedtime: Illustrate Scenes",
+      "description": "Generate all scene illustrations in a single Replicate call; images are sequentially consistent.",
+      "workflow_type": "single",
+      "agent_name": "scene_illustrator"
+    },
+    {
+      "name": "Bedtime: Deliver",
+      "description": "Send the illustrated story via email (attachments) and optionally to WeChat drafts (inline images).",
+      "workflow_type": "single",
+      "agent_name": "distributor"
+    },
+    {
+      "name": "Bedtime Story Pipeline",
+      "description": "Write, illustrate (one multi-image call), and deliver an illustrated bedtime story.",
+      "workflow_type": "pipeline",
+      "workflow_config": {
+        "steps": [
+          {"task_name": "Bedtime: Draft Story"},
+          {"task_name": "Bedtime: Illustrate Scenes"},
+          {"task_name": "Bedtime: Deliver"}
+        ]
+      },
+      "inputs": {
+        "theme": "a shy fox who discovers stargazing with a new friend",
+        "age_range": "4-6",
+        "num_scenes": 4,
+        "style_hint": "soft watercolor storybook, warm pastel palette",
+        "aspect_ratio": "2:3",
+        "size": "2K",
+        "vault_project": "bedtime-stories",
+        "email_to": "",
+        "also_wechat": false
+      },
+      "input_schema": [
+        {
+          "name": "theme",
+          "type": "string",
+          "label": "Story theme",
+          "description": "One-sentence concept for the story.",
+          "required": true
+        },
+        {
+          "name": "age_range",
+          "type": "string",
+          "label": "Target age",
+          "description": "e.g. '4-6' or '6-8'.",
+          "default": "4-6"
+        },
+        {
+          "name": "num_scenes",
+          "type": "number",
+          "label": "Number of scenes",
+          "description": "Typical 4-6. All scenes are generated in ONE Replicate call — the model enforces visual consistency across them.",
+          "default": 4
+        },
+        {
+          "name": "style_hint",
+          "type": "string",
+          "label": "Visual style",
+          "description": "Shared visual style prefix (e.g. 'watercolor', 'soft pastel storybook').",
+          "default": "soft watercolor storybook, warm pastel palette"
+        },
+        {
+          "name": "aspect_ratio",
+          "type": "string",
+          "label": "Aspect ratio",
+          "description": "'1:1', '2:3' (portrait book), '3:2' (landscape), '16:9', '9:16'.",
+          "default": "2:3",
+          "options": ["1:1", "2:3", "3:2", "16:9", "9:16"]
+        },
+        {
+          "name": "size",
+          "type": "string",
+          "label": "Image resolution",
+          "description": "'1K' or '2K'. 2K = slower + more credits but sharper.",
+          "default": "2K",
+          "options": ["1K", "2K"]
+        },
+        {
+          "name": "vault_project",
+          "type": "string",
+          "label": "Vault folder",
+          "description": "Where story assets are saved.",
+          "default": "bedtime-stories"
+        },
+        {
+          "name": "email_to",
+          "type": "string",
+          "label": "Email recipient",
+          "description": "Leave empty to skip email delivery.",
+          "default": ""
+        },
+        {
+          "name": "also_wechat",
+          "type": "boolean",
+          "label": "Also upload WeChat draft",
+          "description": "If true, creates a WeChat Official Account draft with inline images.",
+          "default": false
+        }
+      ]
+    }
+  ]
+}

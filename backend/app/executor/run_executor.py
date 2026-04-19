@@ -293,6 +293,8 @@ async def _execute(
         return await _run_group(task, cfg, run_id, emit)
     if wtype == "pipeline":
         return await _run_pipeline(task, cfg, run_id, emit)
+    if wtype == "passthrough":
+        return await _run_passthrough(task, cfg, run_id, emit)
 
     raise ValueError(f"Unknown workflow_type: {wtype!r}")
 
@@ -456,13 +458,11 @@ async def _run_pipeline(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput
             _ = step_task.id, step_task.name, step_task.description, step_task.workflow_type
             _ = step_task.workflow_config, step_task.agent_id, step_task.inputs
 
-        # Build merged inputs:
-        # - Step 1: pipeline inputs + step params (original task params)
-        # - Step 2+: only step params + previous_output (don't re-inject original params)
-        if i == 0:
-            merged = {**(task.inputs or {}), **step_params}
-        else:
-            merged = {**step_params}
+        # Pipeline-level inputs propagate to EVERY step so user-configurable
+        # settings (email_to, aspect_ratio, etc.) reach downstream agents
+        # without requiring upstream steps to faithfully echo them through
+        # their JSON output.
+        merged = {**(task.inputs or {}), **step_params}
         if previous_output:
             merged["previous_output"] = previous_output
 
@@ -488,6 +488,8 @@ async def _run_pipeline(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput
         elif wtype == "group":
             step_task.inputs = merged
             step_result = await _run_group(step_task, step_cfg, run_id, emit)
+        elif wtype == "passthrough":
+            step_result = await _run_passthrough(step_task, step_cfg, run_id, emit, override_inputs=merged)
         else:
             raise ValueError(f"Pipeline step {i+1}: unsupported workflow_type {wtype!r}")
 
@@ -499,6 +501,129 @@ async def _run_pipeline(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput
     if last_result is None:
         raise RuntimeError("Pipeline produced no output")
     return last_result
+
+
+async def _run_passthrough(
+    task: Task, cfg: dict, run_id: str, emit, override_inputs: dict | None = None,
+) -> AgentOutput:
+    """Deterministic tool-call step — no LLM involved.
+
+    workflow_config shape:
+      {
+        "calls": [
+          {
+            "tool": "@orchid/vault_write",
+            "args": {"project": "{{vault_project}}", "content": "{{previous_output}}", ...},
+            "if": "email_to"    # optional — only run if this ctx var is truthy
+          },
+          ...
+        ]
+      }
+
+    Template substitution in `args`: `{{name}}` is replaced by the same-named
+    key from (task.inputs ∪ override_inputs ∪ a few auto vars: today, now).
+    A string that is EXACTLY `{{key}}` is replaced with the raw value (preserves
+    bool/int types). Mixed interpolation always stringifies.
+    """
+    import re as _re
+
+    calls: list[dict] = cfg.get("calls", [])
+    if not calls:
+        raise ValueError("passthrough task has no `calls`")
+
+    ctx_vars: dict = {**(task.inputs or {}), **(override_inputs or {})}
+    now = datetime.now(timezone.utc)
+    ctx_vars.setdefault("today", now.strftime("%Y-%m-%d"))
+    ctx_vars.setdefault("now", now.isoformat())
+
+    results: list[dict] = []
+    for i, call_spec in enumerate(calls):
+        tool_name: str = call_spec.get("tool", "")
+        raw_args: dict = call_spec.get("args") or {}
+        gate: str = call_spec.get("if", "")
+
+        if gate:
+            gate_val = ctx_vars.get(gate)
+            if not gate_val:
+                results.append({"tool": tool_name, "skipped": True, "reason": f"gate '{gate}' was falsy"})
+                continue
+
+        try:
+            tool = tool_registry.get(tool_name)
+        except KeyError:
+            msg = f"passthrough: unknown tool {tool_name!r}"
+            logger.warning(msg)
+            results.append({"tool": tool_name, "ok": False, "error": msg})
+            continue
+
+        resolved = _resolve_template(raw_args, ctx_vars)
+        if not isinstance(resolved, dict):
+            results.append({"tool": tool_name, "ok": False, "error": "args did not resolve to an object"})
+            continue
+
+        # Emit TOOL_CALL event. Truncate args preview so massive content doesn't spam the stream.
+        preview = {k: (v[:200] + "…" if isinstance(v, str) and len(v) > 200 else v) for k, v in resolved.items()}
+        await emit(RunEventData(
+            run_id=run_id, seq=(i + 1) * 100, type=RunEventType.TOOL_CALL,
+            agent=None, payload={"tool": tool_name, "args": preview},
+        ))
+
+        try:
+            result_content = await tool.call(**resolved)
+            results.append({"tool": tool_name, "ok": True, "result_preview": str(result_content)[:200]})
+            await emit(RunEventData(
+                run_id=run_id, seq=(i + 1) * 100 + 1, type=RunEventType.TOOL_RESULT,
+                agent=None, payload={"tool": tool_name, "result": str(result_content)[:500], "error": False},
+            ))
+        except Exception as exc:
+            logger.exception("passthrough tool %r failed", tool_name)
+            results.append({"tool": tool_name, "ok": False, "error": str(exc)})
+            await emit(RunEventData(
+                run_id=run_id, seq=(i + 1) * 100 + 1, type=RunEventType.TOOL_RESULT,
+                agent=None, payload={"tool": tool_name, "result": str(exc), "error": True},
+            ))
+            # Continue to next call — partial delivery is better than aborting the whole step.
+
+    # Summary as the step's "content" — short, so it doesn't inflate downstream pipeline context.
+    parts = []
+    for r in results:
+        if r.get("skipped"):
+            parts.append(f"{r['tool']} skipped")
+        elif r.get("ok"):
+            parts.append(f"{r['tool']} ok")
+        else:
+            parts.append(f"{r['tool']} FAILED: {r['error']}")
+    summary = f"Passthrough: {len(results)} call(s) — " + "; ".join(parts)
+
+    return AgentOutput(content=summary, agent_name="passthrough", metadata={"results": results})
+
+
+def _resolve_template(value, ctx: dict):
+    """Walk `value` (dict/list/str/other) replacing `{{name}}` tokens.
+
+    - A string that is exactly `{{name}}` (optional whitespace) returns the raw
+      ctx value, preserving its Python type (bool, int, dict, etc.).
+    - Mixed strings (text around the tokens) always produce a string; each
+      `{{name}}` becomes str(ctx[name]) or "" if missing.
+    """
+    import re as _re
+    if isinstance(value, dict):
+        return {k: _resolve_template(v, ctx) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_resolve_template(item, ctx) for item in value]
+    if not isinstance(value, str):
+        return value
+
+    exact = _re.fullmatch(r"\s*\{\{\s*(\w+)\s*\}\}\s*", value)
+    if exact:
+        return ctx.get(exact.group(1))
+
+    def _repl(match: _re.Match) -> str:
+        key = match.group(1).strip()
+        v = ctx.get(key)
+        return "" if v is None else str(v)
+
+    return _re.sub(r"\{\{\s*(\w+)\s*\}\}", _repl, value)
 
 
 def _auto_save_to_vault(task_name: str, run_id: str, content: str) -> None:

@@ -22,13 +22,11 @@ async def lifespan(app: FastAPI):
     # ── Startup ───────────────────────────────────────────────────────────────
     logging.basicConfig(level=settings.app_log_level)
 
-    # 1. Create DB tables (dev) — use Alembic in production
-    from app.db.base import Base
-    from app.db.session import engine
-    import app.db.models  # noqa: F401 — ensure models are registered
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # 1. Register ORM models. Schema is managed by Alembic — migrations run
+    #    in the docker entrypoint before this process starts. For local dev,
+    #    run `alembic upgrade head` manually.
+    import app.db.models  # noqa: F401
+    from app.db.session import engine  # imported here so it's available on shutdown
 
     # 2. Register built-in tools
     from app.tools.registry import tool_registry
@@ -36,17 +34,20 @@ async def lifespan(app: FastAPI):
     from app.tools.builtin.http_request import HttpRequestTool
     from app.tools.builtin.generate_image import GenerateImageTool
     from app.tools.builtin.text_to_speech import TextToSpeechTool
-    from app.tools.builtin.wechat import WeChatPublishTool, WeChatFollowersTool
+    from app.tools.builtin.wechat import WeChatPublishTool, WeChatFollowersTool, WeChatUploadImageTool
     from app.tools.builtin.gmail import GmailSendTool, GmailReadTool
+    from app.tools.builtin.replicate_gen import ReplicateGenerateImagesTool
 
     tool_registry.register(WebSearchTool())
     tool_registry.register(HttpRequestTool())
     tool_registry.register(GenerateImageTool())
     tool_registry.register(TextToSpeechTool())
     tool_registry.register(WeChatPublishTool())
+    tool_registry.register(WeChatUploadImageTool())
     tool_registry.register(WeChatFollowersTool())
     tool_registry.register(GmailSendTool())
     tool_registry.register(GmailReadTool())
+    tool_registry.register(ReplicateGenerateImagesTool())
 
     from app.tools.builtin.vault import VaultWriteTool, VaultReadTool, VaultSearchTool
     tool_registry.register(VaultWriteTool())

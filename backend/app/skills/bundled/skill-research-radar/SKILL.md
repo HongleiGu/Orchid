@@ -1,6 +1,6 @@
 ---
 name: research_radar
-description: "Broad research direction spotting. Scans configurable sources: arXiv, Semantic Scholar, OpenAlex, DBLP, CrossRef, ACL Anthology, HuggingFace (papers + models), and Papers With Code."
+description: "Multi-source scan for trend/direction spotting (hits arXiv, Semantic Scholar, OpenAlex, DBLP, CrossRef, ACL Anthology, HuggingFace, Papers With Code in one call). Heavy — use to map a field, not for targeted lookup of specific papers."
 parameters:
   type: object
   properties:

@@ -36,6 +36,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_STEPS = 20
 # After this many consecutive errors, a tool is disabled for the rest of the loop
 _MAX_TOOL_ERRORS = 2
+# Keep the last N tool_results messages in full. Older ones are replaced with a
+# compact summary before being sent back to the LLM. This cuts the quadratic
+# cost of re-sending every prior tool output on every step — the dominant
+# prompt_tokens cost for research-heavy agents.
+_KEEP_FULL_TOOL_RESULTS = 3
+# Short preview kept when summarizing a trimmed tool_result, so the LLM can
+# still tell "which" tool result it was, just not re-read the full body.
+_SUMMARY_PREVIEW_CHARS = 150
 
 
 class BaseAgent(ABC):
@@ -196,17 +204,19 @@ class LLMAgent(BaseAgent):
                 if getattr(c, "wire_name", c.name) not in disabled_tools
             ]
 
-            now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             system = (
-                f"Current date and time: {now}\n\n"
+                f"Today's date: {today}\n\n"
                 + self.system_prompt
-                + "\n\nIMPORTANT: Only perform exactly what the user asks. "
-                "Do not add extra steps, examples, or actions beyond the request."
+                + "\n\nUse your tools and judgment to complete the request well. "
+                "You may take initiative on intermediate steps — choosing which "
+                "tool fits, retrying with different parameters, or following up "
+                "on partial results — but stay within the scope of what was asked."
             )
             response = await model_client.complete(
                 model=self.model,
                 system=system,
-                history=history,
+                history=_trim_old_tool_results(history),
                 tools=active_callables,
                 user_message=user_message if first_turn else "",
             )
@@ -297,6 +307,51 @@ class LLMAgent(BaseAgent):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _trim_old_tool_results(
+    history: list[Message],
+    keep: int = _KEEP_FULL_TOOL_RESULTS,
+) -> list[Message]:
+    """Return a shallow copy of `history` with old tool_results summarised.
+
+    The last `keep` tool_results messages are kept in full — the LLM still
+    needs recent tool output to reason. Older ones have each ToolResult.content
+    replaced with a short preview + length marker so the model knows the call
+    happened and roughly what it returned, but doesn't re-ingest the full body
+    on every subsequent step.
+
+    Returns a new list; the input is not mutated (the executor still writes
+    the full event stream to the DB from the untrimmed history).
+    """
+    tr_positions = [i for i, m in enumerate(history) if m.role == "tool_results"]
+    if len(tr_positions) <= keep:
+        return history
+
+    to_trim = set(tr_positions[:-keep])
+    out: list[Message] = []
+    for i, m in enumerate(history):
+        if i in to_trim and m.role == "tool_results":
+            trimmed = [
+                ToolResult(
+                    tool_call_id=tr.tool_call_id,
+                    content=_summarise_tool_result(tr.content, tr.is_error),
+                    is_error=tr.is_error,
+                )
+                for tr in m.results
+            ]
+            out.append(Message(role="tool_results", results=trimmed))
+        else:
+            out.append(m)
+    return out
+
+
+def _summarise_tool_result(content: str, is_error: bool) -> str:
+    if len(content) <= 200:
+        return content  # already cheap, leave alone
+    preview = content[: _SUMMARY_PREVIEW_CHARS].replace("\n", " ").strip()
+    tag = "error" if is_error else "result"
+    return f"[older {tag}, {len(content)} chars elided] {preview}..."
+
 
 def _build_dag_prompt(ctx: DAGContext) -> str:
     import json as _json

@@ -1,6 +1,6 @@
 ---
 name: arxiv_papers
-description: Fetch latest AI/ML papers from arXiv search and HuggingFace daily papers page. Returns structured paper metadata including titles, authors, abstracts, and links.
+description: Fresh arXiv preprints + HuggingFace daily papers. Use for very recent (days/weeks old) AI/ML work; for older or peer-reviewed work prefer openalex or semantic_scholar.
 parameters:
   type: object
   properties:

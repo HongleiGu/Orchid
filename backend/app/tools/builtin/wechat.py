@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
+import os
 import re
 import time
+from pathlib import Path
 
 import httpx
 
@@ -25,6 +28,7 @@ from app.tools.base import BaseTool
 logger = logging.getLogger(__name__)
 
 _BASE = "https://api.weixin.qq.com/cgi-bin"
+VAULT_DIR = Path(os.environ.get("VAULT_DIR", "/app/vault"))
 
 # Token cache
 _token_cache: dict = {"token": "", "expires_at": 0}
@@ -82,6 +86,10 @@ class WeChatPublishTool(BaseTool):
             # Convert markdown to HTML if needed
             html_content = _to_html(content)
 
+            # Any <img src="vault://..."> or local paths in the HTML get uploaded
+            # to WeChat and their src rewritten to the returned CDN URL.
+            html_content = await _rewrite_local_images(token, html_content)
+
             # Auto-generate digest if not provided
             if not digest:
                 plain = re.sub(r"<[^>]+>", "", html_content)
@@ -117,6 +125,37 @@ class WeChatPublishTool(BaseTool):
         except Exception as exc:
             logger.error("WeChat publish failed: %s", exc)
             return f"WeChat publish failed: {exc}"
+
+
+class WeChatUploadImageTool(BaseTool):
+    name = "@orchid/wechat_upload_image"
+    description = (
+        "Upload an image to WeChat for use inside an Official Account article. "
+        "Returns a URL you can embed in HTML as <img src='...'>. "
+        "Input is a vault-relative (or absolute) path to a local image file."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Vault-relative path (e.g. 'bedtime-stories/assets/scene-1.png') or absolute path.",
+            },
+        },
+        "required": ["path"],
+    }
+
+    async def call(self, path: str) -> str:
+        try:
+            token = await _get_access_token()
+            p = _resolve_path(path)
+            if not p:
+                return f"Image not found: {path}"
+            url = await _upload_image_to_wechat(token, p)
+            return json.dumps({"type": "image", "path": str(p), "wechat_url": url})
+        except Exception as exc:
+            logger.error("WeChat upload failed: %s", exc)
+            return f"WeChat upload failed: {exc}"
 
 
 class WeChatFollowersTool(BaseTool):
@@ -233,6 +272,73 @@ async def _publish_draft(token: str, media_id: str) -> dict:
             json={"media_id": media_id},
         )
         return resp.json()
+
+
+async def _upload_image_to_wechat(token: str, path: Path) -> str:
+    """Upload an image via /cgi-bin/media/uploadimg — returns a WeChat CDN URL
+    that can be used directly in article <img src="..."> tags. No media_id
+    involved; the URL is permanent for the Official Account."""
+    mime, _ = mimetypes.guess_type(path.name)
+    mime = mime or "image/png"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{_BASE}/media/uploadimg",
+            params={"access_token": token},
+            files={"media": (path.name, path.read_bytes(), mime)},
+        )
+        data = resp.json()
+    if data.get("errcode"):
+        raise ValueError(f"uploadimg failed: {data}")
+    url = data.get("url")
+    if not url:
+        raise ValueError(f"uploadimg returned no url: {data}")
+    return url
+
+
+async def _rewrite_local_images(token: str, html: str) -> str:
+    """Find <img src="{local or vault path}"> in HTML, upload each to WeChat,
+    and replace src with the returned CDN URL. Remote http(s) URLs are left
+    alone. Caches by local path so the same file isn't uploaded twice."""
+    pattern = re.compile(r'<img\s+[^>]*src=["\']([^"\']+)["\']', re.IGNORECASE)
+    cache: dict[str, str] = {}
+
+    async def _get_url(src: str) -> str | None:
+        if src.startswith(("http://", "https://", "data:")):
+            return None
+        if src in cache:
+            return cache[src]
+        local = _resolve_path(src)
+        if not local:
+            logger.warning("WeChat: image not found, leaving src as-is: %s", src)
+            return None
+        url = await _upload_image_to_wechat(token, local)
+        cache[src] = url
+        return url
+
+    # Collect unique local srcs first, then rewrite
+    srcs = list({m.group(1) for m in pattern.finditer(html)})
+    replacements: dict[str, str] = {}
+    for src in srcs:
+        new_url = await _get_url(src)
+        if new_url:
+            replacements[src] = new_url
+
+    def repl(match: re.Match) -> str:
+        src = match.group(1)
+        if src in replacements:
+            return match.group(0).replace(src, replacements[src])
+        return match.group(0)
+
+    return pattern.sub(repl, html)
+
+
+def _resolve_path(raw: str) -> Path | None:
+    """Resolve a vault-relative or absolute path. Returns None if missing."""
+    raw = raw.strip().lstrip("vault://").lstrip("/")  # tolerate a vault:// prefix
+    p = Path(raw)
+    if not p.is_absolute():
+        p = VAULT_DIR / raw
+    return p if p.exists() and p.is_file() else None
 
 
 async def _get_or_create_thumb(token: str) -> str:

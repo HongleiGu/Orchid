@@ -1,6 +1,6 @@
 ---
 name: crossref
-description: Search CrossRef for published works with DOIs. Good coverage of journal articles and conference proceedings. Some abstracts available.
+description: DOI-anchored published works (journals + proceedings). Use when you need a citable DOI or peer-reviewed journal coverage; abstracts are often missing — pair with openalex for content.
 parameters:
   type: object
   properties:

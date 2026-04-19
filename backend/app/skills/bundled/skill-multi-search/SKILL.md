@@ -1,6 +1,6 @@
 ---
 name: multi_search
-description: "Web search using Tavily API (primary, requires TAVILY_API_KEY) and DuckDuckGo JSON API (fallback). Aggregates and deduplicates results."
+description: "Default web search (Tavily + DuckDuckGo aggregated). Use for general-purpose queries. For academic papers prefer the source-specific skills (semantic_scholar, openalex, arxiv_papers, dblp); for a single known URL use web_reader."
 parameters:
   type: object
   properties:

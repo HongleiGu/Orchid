@@ -29,26 +29,46 @@ async def execute(
     }
 
     tasks = []
+    engine_names: list[str] = []
     if "tavily" in active:
         tasks.append(_search_tavily(query, max_results, time_filter))
+        engine_names.append("tavily")
     if "duckduckgo" in active:
         tasks.append(_search_duckduckgo(query))
+        engine_names.append("duckduckgo")
 
-    results_lists = await asyncio.gather(*tasks, return_exceptions=True)
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
 
     all_results: list[dict] = []
-    engine_names = [e for e in ALL_ENGINES if e in active]
-    for i, results in enumerate(results_lists):
-        if isinstance(results, Exception):
-            logger.warning("Engine %s failed: %s", engine_names[i] if i < len(engine_names) else "?", results)
+    engine_errors: list[str] = []
+    for name, outcome in zip(engine_names, outcomes):
+        if isinstance(outcome, Exception):
+            engine_errors.append(f"{name}: unhandled {type(outcome).__name__}: {outcome}")
+            logger.warning("Engine %s unhandled exception: %s", name, outcome)
             continue
-        if isinstance(results, list):
-            for r in results:
-                r["engine"] = engine_names[i] if i < len(engine_names) else "unknown"
-            all_results.extend(results)
+        results, err = outcome
+        if err:
+            engine_errors.append(f"{name}: {err}")
+        for r in results:
+            r["engine"] = name
+        all_results.extend(results)
 
     if not all_results:
-        return f"No results found for: {query}"
+        # Surface WHY we got nothing so the agent (and the user) can act on it.
+        # Previously the skill claimed "No results found" on every failure mode,
+        # which made the agent retry with variations forever.
+        if engine_errors:
+            return (
+                f"[multi-search] No results for {query!r}. "
+                f"All engines failed: {'; '.join(engine_errors)}. "
+                f"Do not retry — fix the config or move on."
+            )
+        return (
+            f"No results found for: {query}. "
+            f"Do NOT retry this with rephrasing — 0 results from the search API "
+            f"means 0 results. Either try a semantically different query or "
+            f"proceed with what you have."
+        )
 
     unique = _deduplicate(all_results)
     unique = unique[:max_results]
@@ -61,13 +81,18 @@ async def execute(
             lines.append(f"> {r['snippet'][:400]}")
         lines.append("")
 
+    # Include soft-failure notes so the agent knows coverage was partial.
+    if engine_errors:
+        lines.append(f"_(note: {'; '.join(engine_errors)})_")
+
     return "\n".join(lines)
 
 
-async def _search_tavily(query: str, max_results: int, time_filter: str) -> list[dict]:
+async def _search_tavily(query: str, max_results: int, time_filter: str) -> tuple[list[dict], str | None]:
+    """Returns (results, error_message). error_message is None on success."""
     api_key = os.environ.get("TAVILY_API_KEY", "")
     if not api_key:
-        return []
+        return [], "TAVILY_API_KEY not set in skill-runner environment"
 
     body: dict = {
         "api_key": api_key,
@@ -80,10 +105,12 @@ async def _search_tavily(query: str, max_results: int, time_filter: str) -> list
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post("https://api.tavily.com/search", json=body)
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # Surface the provider's own error text (truncated) for the agent.
+                return [], f"HTTP {resp.status_code}: {resp.text[:200]}"
             data = resp.json()
 
-        return [
+        results = [
             {
                 "title": r.get("title", ""),
                 "url": r.get("url", ""),
@@ -91,13 +118,21 @@ async def _search_tavily(query: str, max_results: int, time_filter: str) -> list
             }
             for r in data.get("results", [])
         ]
+        return results, None
+    except httpx.TimeoutException:
+        return [], f"timed out after {_TIMEOUT}s"
     except Exception as exc:
         logger.warning("Tavily search failed: %s", exc)
-        return []
+        return [], f"{type(exc).__name__}: {exc}"
 
 
-async def _search_duckduckgo(query: str) -> list[dict]:
-    """DuckDuckGo JSON Instant Answer API — limited but reliable."""
+async def _search_duckduckgo(query: str) -> tuple[list[dict], str | None]:
+    """DuckDuckGo Instant Answer API.
+
+    NOTE: this is NOT a general web search — it only returns structured
+    responses for well-known entities. For most research queries it comes
+    back empty. Kept as a cheap secondary signal, not a real fallback.
+    """
     results: list[dict] = []
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
@@ -122,7 +157,6 @@ async def _search_duckduckgo(query: str) -> list[dict]:
                     "snippet": topic["Text"],
                 })
 
-        # Also try Results section
         for r in data.get("Results", [])[:3]:
             if isinstance(r, dict) and r.get("FirstURL"):
                 results.append({
@@ -131,10 +165,12 @@ async def _search_duckduckgo(query: str) -> list[dict]:
                     "snippet": r.get("Text", ""),
                 })
 
+        return results, None
+    except httpx.TimeoutException:
+        return [], f"timed out after {_TIMEOUT}s"
     except Exception as exc:
         logger.warning("DuckDuckGo failed: %s", exc)
-
-    return results
+        return [], f"{type(exc).__name__}: {exc}"
 
 
 def _deduplicate(results: list[dict]) -> list[dict]:

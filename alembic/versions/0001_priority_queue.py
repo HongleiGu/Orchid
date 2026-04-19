@@ -15,7 +15,7 @@ from alembic import op
 
 
 revision = "0001_priority_queue"
-down_revision = None
+down_revision = "0000_initial"
 branch_labels = None
 depends_on = None
 

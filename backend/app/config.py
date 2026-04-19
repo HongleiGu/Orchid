@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     serpapi_api_key: str = ""
     brave_api_key: str = ""
 
+    # ── LibLibAI (image generation) — deprecated, keep fields so old configs load
+    liblib_access_key: str = ""
+    liblib_secret_key: str = ""
+
+    # ── Replicate (image generation) ─────────────────────────────────────────
+    replicate_api_token: str = ""
+
     # ── Execution limits ──────────────────────────────────────────────────────
     scheduler_timezone: str = "UTC"
     scheduler_max_concurrent_runs: int = 5

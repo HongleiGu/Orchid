@@ -10,8 +10,17 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-# Ensure `app` package is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
+# Ensure `app` package is importable.
+# Local dev: alembic/ is a sibling of backend/ (need ../backend on sys.path).
+# Docker:    alembic/ is bind-mounted into /app/ where `app` lives (need .. on sys.path).
+_here = os.path.dirname(os.path.abspath(__file__))
+for _candidate in (
+    os.path.join(_here, "..", "backend"),
+    os.path.join(_here, ".."),
+):
+    if os.path.isdir(os.path.join(_candidate, "app")):
+        sys.path.insert(0, _candidate)
+        break
 
 from app.db.base import Base
 import app.db.models  # noqa: F401 — register all ORM models

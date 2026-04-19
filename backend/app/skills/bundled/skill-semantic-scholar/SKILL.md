@@ -1,6 +1,6 @@
 ---
 name: semantic_scholar
-description: Search Semantic Scholar for academic papers. Returns titles, authors, abstracts, citation counts, and venues. Good for finding well-cited and recent AI/ML research.
+description: Academic search returning citation counts + abstracts. Best when you want to rank by influence or find well-cited work. AI/ML coverage is strongest; for broader fields prefer openalex.
 parameters:
   type: object
   properties:

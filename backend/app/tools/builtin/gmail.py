@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import base64
 import json
+import mimetypes
+import os
 from pathlib import Path
 import logging
 import time
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email import encoders
 
 import httpx
 
@@ -29,6 +33,8 @@ _GMAIL_API = "https://gmail.googleapis.com/gmail/v1"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _SCOPES = "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly"
 
+VAULT_DIR = Path(os.environ.get("VAULT_DIR", "/app/vault"))
+
 # In-memory token cache (loaded from DB on first use)
 _token_cache: dict = {}
 
@@ -36,7 +42,8 @@ _token_cache: dict = {}
 class GmailSendTool(BaseTool):
     name = "@orchid/gmail_send"
     description = (
-        "Send an email via Gmail. Supports plain text and HTML content. "
+        "Send an email via Gmail. Supports plain text, HTML, and file attachments. "
+        "Attachments are resolved as vault paths (e.g. 'bedtime-stories/assets/scene-1.png'). "
         "Requires Gmail OAuth to be set up first (visit /api/v1/gmail/auth)."
     )
     parameters = {
@@ -52,17 +59,26 @@ class GmailSendTool(BaseTool):
             },
             "body": {
                 "type": "string",
-                "description": "Email body content (plain text or HTML).",
+                "description": "Email body content (plain text, markdown, or HTML).",
             },
             "html": {
                 "type": "boolean",
                 "default": False,
-                "description": "Whether body is HTML.",
+                "description": "Whether body is HTML. Markdown is auto-detected otherwise.",
             },
             "cc": {
                 "type": "string",
                 "default": "",
                 "description": "CC recipients (comma-separated).",
+            },
+            "attachments": {
+                "type": "string",
+                "default": "",
+                "description": (
+                    "Comma-separated vault-relative paths to attach "
+                    "(e.g. 'bedtime-stories/assets/scene-1.png,bedtime-stories/assets/scene-2.png'). "
+                    "Absolute paths also work."
+                ),
             },
         },
         "required": ["to", "subject", "body"],
@@ -75,13 +91,15 @@ class GmailSendTool(BaseTool):
         body: str,
         html: bool = False,
         cc: str = "",
+        attachments: str = "",
     ) -> str:
         try:
             token = await _get_valid_token()
             if not token:
                 return "Error: Gmail not authorized. Visit /api/v1/gmail/auth to set up."
 
-            msg = _build_message(to, subject, body, html, cc)
+            attachment_paths = _resolve_attachments(attachments)
+            msg = _build_message(to, subject, body, html, cc, attachment_paths)
             raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
 
             async with httpx.AsyncClient(timeout=15) as client:
@@ -171,27 +189,76 @@ class GmailReadTool(BaseTool):
 # ── Email builder ─────────────────────────────────────────────────────────────
 
 def _build_message(
-    to: str, subject: str, body: str, html: bool = False, cc: str = ""
+    to: str, subject: str, body: str, html: bool = False, cc: str = "",
+    attachments: list[Path] | None = None,
 ) -> MIMEMultipart:
-    msg = MIMEMultipart("alternative")
-    msg["To"] = to
-    msg["Subject"] = subject
-    if cc:
-        msg["Cc"] = cc
+    # Structure:
+    #   multipart/mixed (outer, when attachments exist)
+    #     multipart/alternative (text + html of the body)
+    #       text/plain
+    #       text/html
+    #     application/<mime>  (each attachment)
+    #
+    # When no attachments, just multipart/alternative at top level.
+    body_part = MIMEMultipart("alternative")
 
     if html:
-        # Already HTML
-        msg.attach(MIMEText(body, "plain"))  # fallback
-        msg.attach(MIMEText(body, "html"))
+        body_part.attach(MIMEText(body, "plain"))
+        body_part.attach(MIMEText(body, "html"))
     elif _looks_like_markdown(body):
-        # Auto-convert markdown → styled HTML
         html_body = _md_to_html(body)
-        msg.attach(MIMEText(body, "plain"))       # plain text fallback
-        msg.attach(MIMEText(html_body, "html"))   # rich HTML version
+        body_part.attach(MIMEText(body, "plain"))
+        body_part.attach(MIMEText(html_body, "html"))
     else:
-        msg.attach(MIMEText(body, "plain"))
+        body_part.attach(MIMEText(body, "plain"))
 
-    return msg
+    if not attachments:
+        body_part["To"] = to
+        body_part["Subject"] = subject
+        if cc:
+            body_part["Cc"] = cc
+        return body_part
+
+    outer = MIMEMultipart("mixed")
+    outer["To"] = to
+    outer["Subject"] = subject
+    if cc:
+        outer["Cc"] = cc
+    outer.attach(body_part)
+    for path in attachments:
+        outer.attach(_build_attachment(path))
+    return outer
+
+
+def _build_attachment(path: Path) -> MIMEBase:
+    mime_type, _ = mimetypes.guess_type(path.name)
+    if mime_type:
+        maintype, subtype = mime_type.split("/", 1)
+    else:
+        maintype, subtype = "application", "octet-stream"
+
+    part = MIMEBase(maintype, subtype)
+    part.set_payload(path.read_bytes())
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", f'attachment; filename="{path.name}"')
+    return part
+
+
+def _resolve_attachments(spec: str) -> list[Path]:
+    """Resolve comma-separated vault-relative (or absolute) paths to real files."""
+    out: list[Path] = []
+    for raw in (spec or "").split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        p = Path(raw)
+        if not p.is_absolute():
+            p = VAULT_DIR / raw
+        if not p.exists() or not p.is_file():
+            logger.warning("Gmail attachment not found, skipping: %s", p)
+            continue
+        out.append(p)
+    return out
 
 
 def _looks_like_markdown(text: str) -> bool:

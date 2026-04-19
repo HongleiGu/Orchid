@@ -9,7 +9,11 @@ _MAX_RESPONSE_CHARS = 8_000
 
 class HttpRequestTool(BaseTool):
     name = "@orchid/http_request"
-    description = "Make an HTTP GET or POST request to a URL and return the response body."
+    description = (
+        "Raw HTTP GET/POST/PUT/PATCH/DELETE for calling APIs without a dedicated tool. "
+        "For HTML pages prefer web_reader (it strips boilerplate). "
+        "For web search prefer multi_search."
+    )
     parameters = {
         "type": "object",
         "properties": {

@@ -1,5 +1,9 @@
 from __future__ import annotations
-import os, logging, httpx
+import logging
+import os
+import re
+
+import httpx
 
 logger = logging.getLogger(__name__)
 _BASE = "https://api.openalex.org"
@@ -38,41 +42,27 @@ async def execute(query: str, max_results: int = 10, year_from: int = 0, venue_t
     if not works:
         return f"No papers found on OpenAlex for: {query}"
 
-    lines = [f"**OpenAlex** — {len(works)} papers for \"{query}\":\n"]
-    for i, w in enumerate(works[:max_results], 1):
-        title = w.get("title", "Untitled")
-        year = w.get("publication_year", "?")
-        cited = w.get("cited_by_count", 0)
-        doi = w.get("doi") or ""
-
-        # Authors
-        authorships = w.get("authorships") or []
-        authors = ", ".join(
-            a.get("author", {}).get("display_name", "") for a in authorships[:4]
-        )
-
-        # Venue
+    rows = []
+    for w in works[:max_results]:
         loc = w.get("primary_location") or {}
         source = loc.get("source") or {}
-        venue = source.get("display_name") or "Unknown venue"
-
-        # Abstract (OpenAlex stores as inverted index — reconstruct)
-        abstract = _reconstruct_abstract(w.get("abstract_inverted_index"))
-
-        lines.append(f"## {i}. {title}")
-        lines.append(f"**Authors**: {authors}")
-        lines.append(f"**Venue**: {venue} ({year}) | **Citations**: {cited}")
-        if doi:
-            lines.append(f"**DOI**: {doi}")
-        if abstract:
-            lines.append(f"**Abstract**: {abstract[:300]}{'...' if len(abstract) > 300 else ''}")
-        lines.append("")
-
-    return "\n".join(lines)
+        rows.append({
+            "title": w.get("title", "Untitled"),
+            "authors": ", ".join(
+                a.get("author", {}).get("display_name", "")
+                for a in (w.get("authorships") or [])[:4]
+            ),
+            "venue": source.get("display_name") or "",
+            "year": w.get("publication_year", "") or "",
+            "citations": w.get("cited_by_count", 0),
+            "url": w.get("doi") or "",
+            "abstract": _reconstruct_abstract(w.get("abstract_inverted_index")),
+        })
+    return _render_compact(rows, header=f"OpenAlex — {len(rows)} papers for \"{query}\"")
 
 
 def _reconstruct_abstract(inverted_index: dict | None) -> str:
-    """OpenAlex stores abstracts as {word: [positions]}. Reconstruct to text."""
+    """OpenAlex abstracts come as {word: [positions]}. Reverse to plain text."""
     if not inverted_index:
         return ""
     word_positions: list[tuple[int, str]] = []
@@ -81,3 +71,38 @@ def _reconstruct_abstract(inverted_index: dict | None) -> str:
             word_positions.append((pos, word))
     word_positions.sort()
     return " ".join(w for _, w in word_positions)
+
+
+_SENTENCE_END = re.compile(r"[.!?](?:\s|$)")
+
+
+def _truncate_sentence(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars]
+    matches = list(_SENTENCE_END.finditer(cut))
+    if matches and matches[-1].end() > max_chars * 0.6:
+        return cut[:matches[-1].end()].rstrip()
+    w = cut.rfind(" ")
+    return (cut[:w] if w > 0 else cut).rstrip() + "…"
+
+
+def _render_compact(papers: list[dict], header: str, abstract_chars: int = 280) -> str:
+    lines = [header, ""]
+    for i, p in enumerate(papers, 1):
+        meta_bits = [b for b in (p.get("venue", ""), str(p.get("year") or "") if p.get("year") else "") if b]
+        meta = " ".join(meta_bits)
+        if p.get("citations") is not None:
+            meta += f" · {p['citations']} cites" if meta else f"{p['citations']} cites"
+        head = f"[{i}] {p.get('title', 'Untitled')}"
+        if p.get("authors"):
+            head += f" — {p['authors']}"
+        if meta:
+            head += f" — {meta}"
+        lines.append(head)
+        if p.get("url"):
+            lines.append(f"    {p['url']}")
+        if p.get("abstract"):
+            lines.append(f"    {_truncate_sentence(p['abstract'], abstract_chars)}")
+        lines.append("")
+    return "\n".join(lines)

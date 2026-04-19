@@ -36,7 +36,14 @@
       "Read(//d/Desktop/study/projects/Orchid/frontend/node_modules/**)",
       "Bash(ls \"d:/Desktop/study/projects/Orchid/examples/\"*.json)",
       "Bash(python -c \"import json; [json.load\\(open\\(f, encoding='utf-8'\\)\\) for f in ['examples/ai-paper-blog-full-pipeline.json', 'examples/professor-research-pipeline.json', 'examples/auto-research-pipeline.json']]; print\\('JSON OK'\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/agent.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/agent.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\), f\\) for f in ['alembic/versions/0000_initial.py', 'alembic/versions/0001_priority_queue.py', 'alembic/env.py', 'backend/app/main.py']]; print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\)\\) for f in ['backend/app/skills/bundled/skill-web-reader/execute.py', 'backend/app/skills/bundled/skill-multi-search/execute.py']]; print\\('OK'\\)\")",
+      "Bash(python -c ':*)",
+      "Bash(python -c \"import json; json.load\\(open\\('examples/bedtime-story-pipeline.json', encoding='utf-8'\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/tools/builtin/liblib.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/tools/builtin/replicate_gen.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/executor/run_executor.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ]
   }
 }

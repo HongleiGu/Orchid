@@ -23,10 +23,15 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY . .
 
+# alembic/ and alembic.ini live at the repo root and are bind-mounted by
+# docker-compose (see volumes:). docker-entrypoint.sh runs `alembic upgrade head`
+# before uvicorn; the alembic CLI comes from requirements.txt.
+
 ENV PYTHONPATH=/app \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Invoke via `sh` so the bind-mount from Windows hosts (no exec bit) still works.
+ENTRYPOINT ["sh", "/app/docker-entrypoint.sh"]

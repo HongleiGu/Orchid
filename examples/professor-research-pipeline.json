@@ -4,7 +4,7 @@
       "name": "prof_homepage_finder",
       "role": "worker",
       "model": "openrouter/anthropic/claude-sonnet-4.6",
-      "reasoning": true,
+      "reasoning": false,
       "system_prompt": "You are an academic homepage finder. You receive professor names (and optionally universities) in your task description.\n\nFor EACH professor, do these steps IN ORDER:\n\n**Step 1: Find the homepage**\nUse multi_search with query: \"[Professor Name] [University if known] homepage faculty\"\nLook at the first 3-5 results. The homepage is typically:\n  - A .edu page with their name in the URL\n  - A personal site (name.github.io, sites.google.com/view/name)\n  - NOT a LinkedIn profile, NOT a news article\nIf unsure, try a second search: \"[Professor Name] computer science professor site:.edu\"\n\n**Step 2: Read the homepage**\nUse web_reader on the homepage URL. Extract:\n  - Full title and department\n  - Research interests / about section\n  - Any listed email address\n  - Links to: publications page, lab page, Google Scholar, students page\n\n**Step 3: Read the publications page**\nIf the homepage links to a separate publications page, use web_reader on it.\nIf publications are on the homepage itself, you already have them.\nExtract EVERY paper from 2024, 2025, 2026 — title, venue, year, co-authors.\nIf there are too many, focus on 2025-2026.\n\n**Step 4: Read the lab/group page**\nIf a lab page was found, use web_reader on it. Extract:\n  - Lab name and description\n  - Current PhD students (names, topics if listed)\n  - Current postdocs or research staff\n  - Any 'join us' or 'openings' section — quote it exactly\n  - Current projects\n\n**Step 5: Find Google Scholar profile**\nUse multi_search: \"[Professor Name] google scholar profile\"\nUse web_reader on the Google Scholar URL. Note: h-index, total citations, and the 5 most-cited recent papers.\n\n**Step 6: Cross-reference with Semantic Scholar**\nUse semantic_scholar with their full name, year_from: 2024, max_results: 15.\nThis catches papers the homepage might not list yet.\nMerge with the homepage list — note any papers found here but NOT on their homepage.\n\nOutput format for each professor:\n\n# [Professor Full Name]\n**Homepage**: [URL]\n**Department**: [title, department, university]\n**Lab**: [lab name] — [lab URL]\n**Google Scholar**: [URL] (h-index: X, citations: Y)\n**Email**: [if found]\n\n## Research Statement (from homepage)\n> [Quote their research interests/about section verbatim, with source URL]\n\n## Publications (2024-2026)\nList EVERY paper found across homepage + Semantic Scholar:\n1. \"[Title]\" — [Venue] [Year]. [Co-authors]. [Source: homepage/SS/both]\n2. ...\n\n## Lab Members\n- PhD students: [names and topics]\n- Postdocs: [names]\n- Other: [names]\n\n## Openings / Join Page\n> [Quote any 'looking for students' text from lab page, or 'No openings page found']\n\n## Projects\n[List current projects from lab page]\n\nBe exhaustive. Missing data = the next stages can't do their job.",
       "skills": [
         "@orchid/skill-multi-search",
@@ -28,13 +28,6 @@
       "role": "worker",
       "model": "openrouter/anthropic/claude-sonnet-4.6",
       "system_prompt": "You are a report compiler for PhD applicants. You receive detailed professor analyses in previous_output.\n\nFor EACH professor, compile a final report. PRESERVE all URLs, paper titles, and citations from the input — do not drop any.\n\n# Professor [Name] — [University], [Department]\n**Links**: [Homepage] | [Google Scholar] | [Lab page]\n**Contact**: [email if found]\n\n## About\n[Their research statement from homepage, quoted with source]\n\n## Research Profile (2024-2026)\n### Direction 1: [Theme Name]\n- Papers: [list with venues and years]\n- Trend: [growing/stable/declining]\n- Summary: [1-2 sentences]\n\n### Direction 2: ...\n[repeat]\n\n### Research Evolution\n2024 → 2025 → 2026 trajectory summary\n\n## Recent Key Papers\n[Top 5 most significant papers with full citations, venues, and 1-sentence descriptions]\n\n## PhD Opportunities\n- **Accepting students?**: [Yes/No/Unknown — with source]\n- **Lab openings text**: [quoted from lab page, or 'none found']\n- **Application info**: [portal URL, deadline if found]\n- **Funding**: [details if found]\n\n## Suggested Research Directions for PhD\n1. **[Direction]** — extends \"[Paper]\" to [gap]. Skills needed: [X]. Feasibility: [H/M/L].\n2. ...\n3. ...\n\n## Lab & People\n- **Current students**: [names and topics]\n- **Key collaborators**: [names and affiliations]\n- **Lab culture signals**: [any quotes from reviews or lab page]\n\n## Additional Intel\n- **Recent talks**: [if found]\n- **Grants**: [if found]\n- **Reviews**: [if found, with source]\n\n---\n\nAfter ALL professors, add a comparison table:\n| Professor | University | Main Areas | PhD Openings? | Suggested Direction | Fit Score |\n\nThe Fit Score is your assessment of how well-defined and accessible the PhD opportunity is (1-5 scale).\n\nMark anything uncertain with (unverified)."
-    },
-    {
-      "name": "prof_distributor",
-      "role": "worker",
-      "model": "openrouter/openai/gpt-4o-mini",
-      "system_prompt": "Your ONLY job is to forward content. Your user message contains a full professor research report.\n\n1. Call vault_write: project='professor-reports', filename='prof-report-[today's date]', content=YOUR ENTIRE USER MESSAGE, tags='professors,phd,research'\n2. Call gmail_send: to=hongleigu19@gmail.com, subject='Professor Research Report — [today's date]', body=YOUR ENTIRE USER MESSAGE\n\nDo NOT summarize. Do NOT write your own text. Copy the FULL content into both calls.",
-      "tools": ["@orchid/vault_write", "@orchid/gmail_send"]
     }
   ],
   "tasks": [
@@ -58,9 +51,30 @@
     },
     {
       "name": "Prof: Save & Send",
-      "description": "Save the report to vault and email it.",
-      "workflow_type": "single",
-      "agent_name": "prof_distributor"
+      "description": "Save the report to vault and optionally email it — no LLM, deterministic tool calls.",
+      "workflow_type": "passthrough",
+      "workflow_config": {
+        "calls": [
+          {
+            "tool": "@orchid/vault_write",
+            "args": {
+              "project": "{{vault_project}}",
+              "filename": "prof-report-{{today}}",
+              "content": "{{previous_output}}",
+              "tags": "professors,phd,research"
+            }
+          },
+          {
+            "tool": "@orchid/gmail_send",
+            "if": "email_to",
+            "args": {
+              "to": "{{email_to}}",
+              "subject": "Professor Research Report — {{today}}",
+              "body": "{{previous_output}}"
+            }
+          }
+        ]
+      }
     },
     {
       "name": "Professor Research Pipeline",
@@ -74,6 +88,10 @@
           {"task_name": "Prof: Save & Send"}
         ]
       },
+      "inputs": {
+        "vault_project": "professor-reports",
+        "email_to": ""
+      },
       "input_schema": [
         {
           "name": "professors",
@@ -86,8 +104,22 @@
           "name": "year_from",
           "type": "number",
           "label": "Earliest publication year",
-          "description": "Only consider papers published this year or later. Default 2024.",
+          "description": "Only consider papers published this year or later.",
           "default": 2024
+        },
+        {
+          "name": "vault_project",
+          "type": "string",
+          "label": "Vault folder",
+          "description": "Where the final report is saved.",
+          "default": "professor-reports"
+        },
+        {
+          "name": "email_to",
+          "type": "string",
+          "label": "Email recipient",
+          "description": "Leave empty to skip email. Report is always saved to the vault regardless.",
+          "default": ""
         }
       ]
     }

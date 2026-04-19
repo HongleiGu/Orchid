@@ -17,8 +17,9 @@ logger = logging.getLogger(__name__)
 class GenerateImageTool(BaseTool):
     name = "@orchid/generate_image"
     description = (
-        "Generate an image from a text prompt. Returns a viewable image. "
-        "Use descriptive, detailed prompts for best results."
+        "Single image from a text prompt — the simplest image tool. "
+        "Use for one-off visuals. For a series of style-consistent scenes use "
+        "replicate_generate_images; for LoRA/Flux/SDXL control use liblib_generate_image."
     )
     parameters = {
         "type": "object",

@@ -1,6 +1,6 @@
 ---
 name: openalex
-description: Search OpenAlex for academic works. Large coverage, good venue/concept filtering, returns abstracts. Covers journals and conferences including NeurIPS, ICLR, ACL, EMNLP.
+description: Broadest academic coverage (journals + conferences across all fields) with abstracts and venue/concept filtering. Default choice for academic search. Use semantic_scholar instead if you need to rank by citation count.
 parameters:
   type: object
   properties:

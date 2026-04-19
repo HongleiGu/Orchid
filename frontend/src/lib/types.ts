@@ -60,7 +60,7 @@ export interface Task {
   id: string;
   name: string;
   description: string;
-  workflow_type: "single" | "dag" | "group" | "pipeline";
+  workflow_type: "single" | "dag" | "group" | "pipeline" | "passthrough";
   workflow_config: Record<string, unknown>;
   agent_id: string | null;
   inputs: Record<string, unknown>;
@@ -76,7 +76,7 @@ export interface Task {
 export interface TaskCreate {
   name: string;
   description?: string;
-  workflow_type?: "single" | "dag" | "group" | "pipeline";
+  workflow_type?: "single" | "dag" | "group" | "pipeline" | "passthrough";
   workflow_config?: Record<string, unknown>;
   agent_id?: string | null;
   inputs?: Record<string, unknown>;

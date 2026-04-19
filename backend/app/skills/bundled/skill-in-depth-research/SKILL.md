@@ -1,6 +1,6 @@
 ---
 name: in_depth_research
-description: "Perform multi-step deep research on a topic. Searches the web iteratively, follows citation trails, evaluates sources, and synthesizes findings into a structured research report with citations."
+description: "Heavyweight: runs an internal research loop (5-10+ searches, citation trails, source evaluation, synthesis) and returns a structured cited report. Expensive — use only when a full report is the deliverable. For quick lookups use multi_search."
 parameters:
   type: object
   properties:

@@ -1,6 +1,6 @@
 ---
 name: dblp
-description: Search DBLP for computer science publications. Best for finding papers from top venues (NeurIPS, ICLR, EMNLP, ACL, ICML etc). Returns metadata only (no abstracts).
+description: CS publications, best for top-venue lookup (NeurIPS, ICLR, ICML, ACL, EMNLP). Metadata only — no abstracts. Use to confirm venue/year/authors, not to read content.
 parameters:
   type: object
   properties:

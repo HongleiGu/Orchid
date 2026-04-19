@@ -5,7 +5,11 @@ from app.tools.base import BaseTool
 
 class WebSearchTool(BaseTool):
     name = "@orchid/web_search"
-    description = "Search the web for up-to-date information."
+    description = (
+        "Basic single-provider web search (Tavily or Brave, whichever is configured). "
+        "Prefer multi_search when available — it aggregates multiple engines. "
+        "Use this when you need a quick, low-overhead query."
+    )
     parameters = {
         "type": "object",
         "properties": {
