@@ -137,10 +137,6 @@ async def export_config(db: AsyncSession = Depends(get_db)):
                 "edges": cfg.get("edges", []),
                 "entry": cfg.get("entry", ""),
             }
-        elif t.workflow_type == "pipeline":
-            # Pipeline steps reference tasks by name — pass through as-is
-            tc.workflow_config = dict(t.workflow_config or {})
-
         tasks.append(tc)
 
     return DataResponse(data=PipelineConfig(skills=skill_names, agents=agents, tasks=tasks))
@@ -293,11 +289,6 @@ async def _do_import(body: PipelineConfig, db: AsyncSession) -> ImportResult:
                 "edges": cfg.get("edges", []),
                 "entry": cfg.get("entry", ""),
             }
-
-        elif tc.workflow_type == "pipeline":
-            # Pipeline steps reference tasks by name — pass through as-is
-            # (task names are resolved at runtime by the executor)
-            workflow_config = tc.workflow_config
 
         db.add(Task(
             id=task_id,

@@ -256,8 +256,14 @@ async def _run_wrapper(task_id: str, run_id: str, runtime_params: dict | None = 
             await _set_task_status(db, task_id, "done")
             await db.commit()
 
-            # Auto-save to vault for pipeline tasks
-            if task_obj and task_obj.workflow_type == "pipeline" and output.content:
+            # Auto-save every successful run's content to the vault. Skipped
+            # if the workflow opted out via `auto_save: false` in workflow_config.
+            cfg = task_obj.workflow_config or {} if task_obj else {}
+            if (
+                task_obj
+                and output.content
+                and cfg.get("auto_save", True)
+            ):
                 _auto_save_to_vault(task_obj.name, run_id, output.content)
         await emit(RunEventData(
             run_id=run_id, seq=0, type=RunEventType.TERMINATED,
@@ -312,12 +318,12 @@ async def _execute(
         return await _run_dag(task, cfg, run_id, emit)
     if wtype == "group":
         return await _run_group(task, cfg, run_id, emit)
-    if wtype == "pipeline":
-        return await _run_pipeline(task, cfg, run_id, emit)
-    if wtype == "passthrough":
-        return await _run_passthrough(task, cfg, run_id, emit)
 
-    raise ValueError(f"Unknown workflow_type: {wtype!r}")
+    raise ValueError(
+        f"Unknown workflow_type: {wtype!r}. Supported: single | dag | group. "
+        "(pipeline / passthrough were removed; express linear chains as a DAG "
+        "and deterministic skill calls as a single-node DAG with a thin agent.)"
+    )
 
 
 async def _load_agent_orm(agent_id: str) -> AgentORM:
@@ -370,6 +376,19 @@ async def _run_single(task: Task, run_id: str, emit, override_inputs: dict | Non
 
 
 async def _run_dag(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
+    """JSON config shape:
+        {
+          "nodes": [
+            {"name": "search", "agent_id": "...", "outputs": {...}},
+            {"name": "summarise", "agent_id": "...", "inputs": {...}}
+          ],
+          "edges": [
+            {"source": "search", "target": "summarise"},
+            {"source": "search", "target": "skip", "if": "'no results' in output.content.lower()"}
+          ],
+          "entry": "search"   # optional; defaults to first node
+        }
+    """
     node_cfgs: list[dict] = cfg.get("nodes", [])
     edge_cfgs: list[dict] = cfg.get("edges", [])
     entry: str = cfg.get("entry", node_cfgs[0]["name"] if node_cfgs else "")
@@ -381,9 +400,21 @@ async def _run_dag(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
         orm = await _load_agent_orm(nc["agent_id"])
         agent = _orm_to_llm_agent(orm)
         all_skills.extend(_resolve_skills(agent))
-        nodes[nc["name"]] = DAGNode(name=nc["name"], agent=agent)
+        nodes[nc["name"]] = DAGNode(
+            name=nc["name"],
+            agent=agent,
+            inputs=nc.get("inputs"),
+            outputs=nc.get("outputs"),
+        )
 
-    edges = [DAGEdge(source=e["source"], target=e["target"]) for e in edge_cfgs]
+    edges = [
+        DAGEdge(
+            source=e["source"],
+            target=e["target"],
+            condition=e.get("if") or e.get("condition"),
+        )
+        for e in edge_cfgs
+    ]
     dag = DAGDefinition(nodes=nodes, edges=edges, entry=entry)
 
     return await DAGExecutor().execute(
@@ -429,232 +460,23 @@ async def _run_group(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
     )
 
 
-async def _run_pipeline(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
-    """
-    Pipeline workflow — chains multiple tasks sequentially.
-    Output of step N is passed as input to step N+1 via `previous_output`.
-
-    workflow_config format:
-    {
-      "steps": [
-        {"task_name": "Fetch Papers", "params": {"topic": "AI agents"}},
-        {"task_name": "Write Blog Post"}
-      ]
-    }
-
-    Each step's params are merged with:
-      - The pipeline's own task.inputs
-      - {"previous_output": <content from prior step>}
-    """
-    steps: list[dict] = cfg.get("steps", [])
-    if not steps:
-        raise ValueError("Pipeline has no steps")
-
-    logger.info("Pipeline starting with %d steps, inputs: %s",
-                len(steps), list((task.inputs or {}).keys()))
-
-    previous_output: str = ""
-    last_result: AgentOutput | None = None
-
-    for i, step in enumerate(steps):
-        step_task_name: str = step.get("task_name", "")
-        step_params: dict = step.get("params", {})
-
-        # Resolve task by name — eagerly load all attributes before session closes
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Task).where(Task.name == step_task_name)
-            )
-            step_task = result.scalar_one_or_none()
-            if step_task is None:
-                raise ValueError(f"Pipeline step {i+1}: task {step_task_name!r} not found")
-            # Force-load all attributes while session is open
-            _ = step_task.id, step_task.name, step_task.description, step_task.workflow_type
-            _ = step_task.workflow_config, step_task.agent_id, step_task.inputs
-
-        # Pipeline-level inputs propagate to EVERY step so user-configurable
-        # settings (email_to, aspect_ratio, etc.) reach downstream agents
-        # without requiring upstream steps to faithfully echo them through
-        # their JSON output.
-        merged = {**(task.inputs or {}), **step_params}
-        if previous_output:
-            merged["previous_output"] = previous_output
-
-        # Emit pipeline step event
-        await emit(RunEventData(
-            run_id=run_id, seq=0, type=RunEventType.COLLAB_ROUTE,
-            agent=None,
-            payload={"step": i + 1, "total_steps": len(steps), "task_name": step_task_name},
-        ))
-
-        # Execute the step's task inline — pass merged inputs directly
-        prev_len = len(previous_output) if previous_output else 0
-        logger.info("Pipeline step %d/%d (%s): inputs keys=%s, previous_output=%d chars",
-                     i + 1, len(steps), step_task_name, list(merged.keys()), prev_len)
-        step_cfg = step_task.workflow_config or {}
-        wtype = step_task.workflow_type
-
-        if wtype == "single":
-            step_result = await _run_single(step_task, run_id, emit, override_inputs=merged)
-        elif wtype == "dag":
-            step_task.inputs = merged
-            step_result = await _run_dag(step_task, step_cfg, run_id, emit)
-        elif wtype == "group":
-            step_task.inputs = merged
-            step_result = await _run_group(step_task, step_cfg, run_id, emit)
-        elif wtype == "passthrough":
-            step_result = await _run_passthrough(step_task, step_cfg, run_id, emit, override_inputs=merged)
-        else:
-            raise ValueError(f"Pipeline step {i+1}: unsupported workflow_type {wtype!r}")
-
-        previous_output = step_result.content
-        last_result = step_result
-
-        logger.info("Pipeline step %d/%d (%s) completed", i + 1, len(steps), step_task_name)
-
-    if last_result is None:
-        raise RuntimeError("Pipeline produced no output")
-    return last_result
-
-
-async def _run_passthrough(
-    task: Task, cfg: dict, run_id: str, emit, override_inputs: dict | None = None,
-) -> AgentOutput:
-    """Deterministic tool-call step — no LLM involved.
-
-    workflow_config shape:
-      {
-        "calls": [
-          {
-            "tool": "@orchid/vault_write",
-            "args": {"project": "{{vault_project}}", "content": "{{previous_output}}", ...},
-            "if": "email_to"    # optional — only run if this ctx var is truthy
-          },
-          ...
-        ]
-      }
-
-    Template substitution in `args`: `{{name}}` is replaced by the same-named
-    key from (task.inputs ∪ override_inputs ∪ a few auto vars: today, now).
-    A string that is EXACTLY `{{key}}` is replaced with the raw value (preserves
-    bool/int types). Mixed interpolation always stringifies.
-    """
-    import re as _re
-
-    calls: list[dict] = cfg.get("calls", [])
-    if not calls:
-        raise ValueError("passthrough task has no `calls`")
-
-    ctx_vars: dict = {**(task.inputs or {}), **(override_inputs or {})}
-    now = datetime.now(timezone.utc)
-    ctx_vars.setdefault("today", now.strftime("%Y-%m-%d"))
-    ctx_vars.setdefault("now", now.isoformat())
-
-    results: list[dict] = []
-    for i, call_spec in enumerate(calls):
-        skill_name: str = call_spec.get("tool") or call_spec.get("skill", "")
-        raw_args: dict = call_spec.get("args") or {}
-        gate: str = call_spec.get("if", "")
-
-        if gate:
-            gate_val = ctx_vars.get(gate)
-            if not gate_val:
-                results.append({"tool": skill_name, "skipped": True, "reason": f"gate '{gate}' was falsy"})
-                continue
-
-        try:
-            skill = skill_registry.get(skill_name)
-        except KeyError:
-            msg = f"passthrough: unknown skill {skill_name!r}"
-            logger.warning(msg)
-            results.append({"tool": skill_name, "ok": False, "error": msg})
-            continue
-
-        resolved = _resolve_template(raw_args, ctx_vars)
-        if not isinstance(resolved, dict):
-            results.append({"tool": skill_name, "ok": False, "error": "args did not resolve to an object"})
-            continue
-
-        preview = {k: (v[:200] + "…" if isinstance(v, str) and len(v) > 200 else v) for k, v in resolved.items()}
-        await emit(RunEventData(
-            run_id=run_id, seq=(i + 1) * 100, type=RunEventType.TOOL_CALL,
-            agent=None, payload={"tool": skill_name, "args": preview},
-        ))
-
-        try:
-            result_content = await skill.execute(**resolved)
-            results.append({"tool": skill_name, "ok": True, "result_preview": str(result_content)[:200]})
-            await emit(RunEventData(
-                run_id=run_id, seq=(i + 1) * 100 + 1, type=RunEventType.TOOL_RESULT,
-                agent=None, payload={"tool": skill_name, "result": str(result_content)[:500], "error": False},
-            ))
-        except Exception as exc:
-            logger.exception("passthrough skill %r failed", skill_name)
-            results.append({"tool": skill_name, "ok": False, "error": str(exc)})
-            await emit(RunEventData(
-                run_id=run_id, seq=(i + 1) * 100 + 1, type=RunEventType.TOOL_RESULT,
-                agent=None, payload={"tool": skill_name, "result": str(exc), "error": True},
-            ))
-
-    # Summary as the step's "content" — short, so it doesn't inflate downstream pipeline context.
-    parts = []
-    for r in results:
-        if r.get("skipped"):
-            parts.append(f"{r['tool']} skipped")
-        elif r.get("ok"):
-            parts.append(f"{r['tool']} ok")
-        else:
-            parts.append(f"{r['tool']} FAILED: {r['error']}")
-    summary = f"Passthrough: {len(results)} call(s) — " + "; ".join(parts)
-
-    return AgentOutput(content=summary, agent_name="passthrough", metadata={"results": results})
-
-
-def _resolve_template(value, ctx: dict):
-    """Walk `value` (dict/list/str/other) replacing `{{name}}` tokens.
-
-    - A string that is exactly `{{name}}` (optional whitespace) returns the raw
-      ctx value, preserving its Python type (bool, int, dict, etc.).
-    - Mixed strings (text around the tokens) always produce a string; each
-      `{{name}}` becomes str(ctx[name]) or "" if missing.
-    """
-    import re as _re
-    if isinstance(value, dict):
-        return {k: _resolve_template(v, ctx) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_resolve_template(item, ctx) for item in value]
-    if not isinstance(value, str):
-        return value
-
-    exact = _re.fullmatch(r"\s*\{\{\s*(\w+)\s*\}\}\s*", value)
-    if exact:
-        return ctx.get(exact.group(1))
-
-    def _repl(match: _re.Match) -> str:
-        key = match.group(1).strip()
-        v = ctx.get(key)
-        return "" if v is None else str(v)
-
-    return _re.sub(r"\{\{\s*(\w+)\s*\}\}", _repl, value)
-
-
 def _auto_save_to_vault(task_name: str, run_id: str, content: str) -> None:
-    """Save pipeline output to vault as a markdown file."""
+    """Persist a successful run's output to the vault as a markdown file.
+    Best-effort — failures here don't fail the run."""
     try:
         import re
         from pathlib import Path
         import os
 
         vault_dir = Path(os.environ.get("VAULT_DIR", "/app/vault"))
-        # Derive project name from task name
-        project = re.sub(r"[^\w\-. ]", "", task_name).strip().lower().replace(" ", "-") or "pipelines"
+        project = re.sub(r"[^\w\-. ]", "", task_name).strip().lower().replace(" ", "-") or "runs"
         project_dir = vault_dir / project
         project_dir.mkdir(parents=True, exist_ok=True)
 
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         filename = f"{date_str}-{run_id[:8]}.md"
         (project_dir / filename).write_text(content, encoding="utf-8")
-        logger.info("Auto-saved pipeline output to vault: %s/%s", project, filename)
+        logger.info("Auto-saved run output to vault: %s/%s", project, filename)
     except Exception as exc:
         logger.warning("Failed to auto-save to vault: %s", exc)
 
