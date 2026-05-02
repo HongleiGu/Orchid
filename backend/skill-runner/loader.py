@@ -34,6 +34,7 @@ class LoadedSkill:
     pkg_type: str  # "skill" | "tool"
     package_dir: Path
     execute_fn: Callable[..., Awaitable[str]]
+    timeout: int = 30  # per-skill execution cap, seconds; from SKILL.md `timeout:`
 
 
 _loaded: dict[str, LoadedSkill] = {}
@@ -148,6 +149,7 @@ def _load_package(pkg_dir: Path) -> LoadedSkill | None:
         "properties": {},
         "required": [],
     }
+    timeout = int(meta.get("timeout") or 30)
 
     # Load Python module
     execute_fn = _load_execute(name, execute_path)
@@ -159,6 +161,7 @@ def _load_package(pkg_dir: Path) -> LoadedSkill | None:
         pkg_type=pkg_type,
         package_dir=pkg_dir,
         execute_fn=execute_fn,
+        timeout=timeout,
     )
 
 

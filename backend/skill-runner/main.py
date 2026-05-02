@@ -1,14 +1,30 @@
 """
-Skill-runner: sandboxed micro-service for executing marketplace skills/tools.
+Skill-runner: sandboxed micro-service for executing skills.
 
-Endpoints:
-  POST /execute           — run a skill by name with kwargs
-  POST /install-deps      — pip install from a requirements.txt path
-  GET  /list              — list all loaded skills
-  GET  /health            — liveness check
-  POST /reload            — rescan packages dir and reload all
-  POST /reload/{name}     — reload a single package
-  POST /unload/{name}     — unload a single package
+Public contract — versioned at /version. Stable across orchid-platform
+implementations (per future.md Tier 1.1).
+
+Endpoints
+---------
+GET  /version           → {"runner_version": str, "api_version": str}
+GET  /health            → {"status": "ok", "loaded": int}
+GET  /list              → list[SkillInfo]   (loaded skills + their schemas)
+POST /execute           → run a skill by name with kwargs
+POST /install-deps      → pip install from a requirements.txt path
+POST /reload            → rescan packages dir, reload all
+POST /reload/{name}     → reload a single package
+POST /unload/{name}     → unload a single package
+
+Execute contract
+----------------
+Request:
+  {"skill_name": str, "kwargs": dict}
+Response:
+  {"result": str, "error": str | null}
+
+A skill is bounded by its SKILL.md `timeout:` field (default 30s).
+On timeout, response has empty result + error message; HTTP status stays 200.
+HTTP 404 means the skill is not loaded.
 """
 from __future__ import annotations
 
@@ -28,7 +44,12 @@ from loader import LoadedSkill, get_loaded, get_skill, load_single, scan_and_loa
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-EXECUTE_TIMEOUT = 30  # seconds
+# Bumped only as a hard ceiling; per-skill timeout comes from SKILL.md.
+DEFAULT_EXECUTE_TIMEOUT = 30
+MAX_EXECUTE_TIMEOUT = 600
+
+RUNNER_VERSION = "0.2.0"
+API_VERSION = "1"
 
 
 @asynccontextmanager
@@ -62,6 +83,12 @@ class SkillInfo(BaseModel):
     parameters: dict
     pkg_type: str
     package_dir: str
+    timeout: int = 30
+
+
+class VersionInfo(BaseModel):
+    runner_version: str
+    api_version: str
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -69,6 +96,11 @@ class SkillInfo(BaseModel):
 @app.get("/health")
 async def health():
     return {"status": "ok", "loaded": len(get_loaded())}
+
+
+@app.get("/version", response_model=VersionInfo)
+async def version():
+    return VersionInfo(runner_version=RUNNER_VERSION, api_version=API_VERSION)
 
 
 @app.get("/list", response_model=list[SkillInfo])
@@ -80,6 +112,7 @@ async def list_skills():
             parameters=s.parameters,
             pkg_type=s.pkg_type,
             package_dir=str(s.package_dir),
+            timeout=s.timeout,
         )
         for s in get_loaded().values()
     ]
@@ -91,16 +124,17 @@ async def execute(req: ExecuteRequest):
     if not skill:
         raise HTTPException(404, f"Skill {req.skill_name!r} not loaded")
 
+    timeout = min(skill.timeout or DEFAULT_EXECUTE_TIMEOUT, MAX_EXECUTE_TIMEOUT)
     try:
         result = await asyncio.wait_for(
             _run_skill(skill, req.kwargs),
-            timeout=EXECUTE_TIMEOUT,
+            timeout=timeout,
         )
         return ExecuteResponse(result=result)
     except asyncio.TimeoutError:
         return ExecuteResponse(
             result="",
-            error=f"Skill {req.skill_name!r} timed out after {EXECUTE_TIMEOUT}s",
+            error=f"Skill {req.skill_name!r} timed out after {timeout}s",
         )
     except Exception as exc:
         tb = traceback.format_exc()
