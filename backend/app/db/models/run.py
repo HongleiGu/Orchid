@@ -41,6 +41,10 @@ class RunEvent(Base):
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     agent: Mapped[str | None] = mapped_column(String(128))
+    # Span-tree linkage — populated for AGENT_START / AGENT_END / TOOL_CALL /
+    # TOOL_RESULT / COLLAB_ROUTE. Nullable so pre-span events still validate.
+    span_id: Mapped[str | None] = mapped_column(String(26), index=True)
+    parent_span_id: Mapped[str | None] = mapped_column(String(26))
     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     ts: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

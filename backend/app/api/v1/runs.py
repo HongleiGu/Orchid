@@ -24,10 +24,27 @@ class RunEventOut(BaseModel):
     seq: int
     type: str
     agent: str | None
+    span_id: str | None = None
+    parent_span_id: str | None = None
     payload: dict
     ts: datetime
 
     model_config = {"from_attributes": True}
+
+
+class SpanNode(BaseModel):
+    span_id: str
+    parent_span_id: str | None
+    kind: str           # "agent" | "dag_node" | "peer_call"
+    agent: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    status: str         # "running" | "done" | "cancelled" | "failed"
+
+
+class CancelSpanOut(BaseModel):
+    span_id: str
+    cancelled: bool
 
 
 class RunOut(BaseModel):
@@ -93,6 +110,75 @@ async def get_run(run_id: str, db: AsyncSession = Depends(get_db)):
         events=[RunEventOut.model_validate(e) for e in events],
     )
     return DataResponse(data=detail)
+
+
+@router.get("/{run_id}/spans", response_model=DataResponse[list[SpanNode]])
+async def list_spans(run_id: str, db: AsyncSession = Depends(get_db)):
+    """Reconstruct the span tree from the immutable run_events log.
+
+    Each AGENT_START opens a span; matching AGENT_END closes it. A span is
+    "running" if no end event has been seen, otherwise it's whatever status
+    the end event reported.
+    """
+    from app.core.span import span_registry
+
+    run = await db.get(Run, run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    rows = (
+        await db.execute(
+            select(RunEvent)
+            .where(RunEvent.run_id == run_id)
+            .where(RunEvent.span_id.is_not(None))
+            .order_by(RunEvent.seq)
+        )
+    ).scalars().all()
+
+    spans: dict[str, SpanNode] = {}
+    for ev in rows:
+        sid = ev.span_id
+        if sid not in spans:
+            spans[sid] = SpanNode(
+                span_id=sid,
+                parent_span_id=ev.parent_span_id,
+                kind=(ev.payload or {}).get("kind", "agent")
+                    if ev.type == "agent_start" else "agent",
+                agent=ev.agent,
+                started_at=ev.ts if ev.type == "agent_start" else None,
+                finished_at=None,
+                status="running",
+            )
+        node = spans[sid]
+        if ev.type == "agent_start":
+            node.started_at = ev.ts
+            node.kind = (ev.payload or {}).get("kind", node.kind)
+        elif ev.type == "agent_end":
+            node.finished_at = ev.ts
+            node.status = (ev.payload or {}).get("status", "done")
+
+    # Spans that are still running in this process get their live status
+    # from the registry so the UI can see them before AGENT_END is emitted.
+    live_ids = {s["span_id"] for s in span_registry.list_for_run(run_id)}
+    for sid, node in spans.items():
+        if node.finished_at is None and sid not in live_ids:
+            # Span never closed and no live task either — likely a crashed run.
+            node.status = "failed"
+
+    return DataResponse(data=list(spans.values()))
+
+
+@router.post("/{run_id}/spans/{span_id}/cancel", response_model=DataResponse[CancelSpanOut])
+async def cancel_span(run_id: str, span_id: str, db: AsyncSession = Depends(get_db)):
+    """Cancel one subagent's task without aborting the whole run."""
+    from app.core.span import span_registry
+
+    run = await db.get(Run, run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    cancelled = await span_registry.cancel(span_id)
+    return DataResponse(data=CancelSpanOut(span_id=span_id, cancelled=cancelled))
 
 
 @router.post("/{run_id}/cancel", response_model=DataResponse[CancelOut])

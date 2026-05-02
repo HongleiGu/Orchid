@@ -76,10 +76,8 @@ class LLMAgent(BaseAgent):
     """
 
     async def run(self, ctx: DAGContext) -> AgentOutput:
-        await ctx.emit(
-            RunEventData(run_id=ctx.run_id, seq=0, type=RunEventType.AGENT_START,
-                         agent=self.name, payload={"mode": "dag"})
-        )
+        # AGENT_START is emitted by the spawn site (run_wrapper / DAGExecutor)
+        # so it can stamp the right span kind. We just emit AGENT_END here.
         user_msg = _build_dag_prompt(ctx)
         output = await self._llm_loop(
             user_msg, list(ctx.skills), ctx.run_id, ctx.emit,
@@ -87,15 +85,12 @@ class LLMAgent(BaseAgent):
         )
         await ctx.emit(
             RunEventData(run_id=ctx.run_id, seq=0, type=RunEventType.AGENT_END,
-                         agent=self.name, payload={"content": output.content[:200]})
+                         agent=self.name,
+                         payload={"content": output.content[:200], "status": "done"})
         )
         return output
 
     async def _act(self, ctx: CollabContext) -> AgentOutput | TerminationSignal:
-        await ctx.emit(
-            RunEventData(run_id=ctx.run_id, seq=0, type=RunEventType.AGENT_START,
-                         agent=self.name, payload={"mode": "collab"})
-        )
         user_msg = ctx.task_description
         if ctx.curated_context:
             user_msg = f"{ctx.task_description}\n\n---\nContext from orchestrator:\n{ctx.curated_context}"
@@ -111,7 +106,8 @@ class LLMAgent(BaseAgent):
         )
         await ctx.emit(
             RunEventData(run_id=ctx.run_id, seq=0, type=RunEventType.AGENT_END,
-                         agent=self.name, payload={"content": output.content[:200]})
+                         agent=self.name,
+                         payload={"content": output.content[:200], "status": "done"})
         )
         # Orchestrators (have peers) return TerminationSignal when they produce a
         # final answer — the GroupExecutor uses this to know the collaboration is done.

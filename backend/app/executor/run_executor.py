@@ -27,6 +27,7 @@ from app.config import get_settings
 from app.core.agent import LLMAgent
 from app.core.dag import DAGDefinition, DAGEdge, DAGExecutor, DAGNode
 from app.core.group import CollabGroup, GroupExecutor
+from app.core.span import current_span_id, span_registry
 from app.core.types import AgentOutput, RunEventData, RunEventType
 from app.db.models.agent import Agent as AgentORM
 from app.db.models.run import Run, RunEvent
@@ -203,12 +204,18 @@ async def _run_wrapper(task_id: str, run_id: str, runtime_params: dict | None = 
 
     async def emit(event: RunEventData) -> None:
         event.seq = seq_counter.next()
+        # Default span fields from the live contextvar so callers don't have
+        # to wire span_id through every emit site.
+        if event.span_id is None:
+            event.span_id = current_span_id.get()
         async with AsyncSessionLocal() as db:
             db.add(RunEvent(
                 run_id=event.run_id,
                 seq=event.seq,
                 type=event.type.value,
                 agent=event.agent,
+                span_id=event.span_id,
+                parent_span_id=event.parent_span_id,
                 payload=event.payload,
                 ts=event.ts,
             ))
@@ -219,9 +226,22 @@ async def _run_wrapper(task_id: str, run_id: str, runtime_params: dict | None = 
             "seq": event.seq,
             "type": event.type.value,
             "agent": event.agent,
+            "span_id": event.span_id,
+            "parent_span_id": event.parent_span_id,
             "payload": event.payload,
             "ts": event.ts.isoformat(),
         })
+
+    # Open the root span. Runs to completion inside the wrapper task; the
+    # cancel_run() API can target this span_id directly for a whole-run kill.
+    root_span_id = span_registry.open(run_id=run_id, kind="agent", agent=None)
+    span_registry.attach_task(root_span_id, asyncio.current_task())
+    current_span_id.set(root_span_id)
+    await emit(RunEventData(
+        run_id=run_id, seq=0, type=RunEventType.AGENT_START,
+        agent=None, span_id=root_span_id, parent_span_id=None,
+        payload={"kind": "run"},
+    ))
 
     try:
         output = await _execute(task_id, run_id, emit, runtime_params or {})
@@ -267,6 +287,8 @@ async def _run_wrapper(task_id: str, run_id: str, runtime_params: dict | None = 
             run_id=run_id, seq=0, type=RunEventType.ERROR,
             agent=None, payload={"error": str(exc)},
         ))
+    finally:
+        span_registry.close(root_span_id)
 
 
 async def _execute(

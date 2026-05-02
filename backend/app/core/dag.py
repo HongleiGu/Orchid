@@ -14,6 +14,7 @@ from typing import Callable
 
 from app.core.agent import BaseAgent
 from app.core.context import DAGContext
+from app.core.span import current_span_id, span_registry
 from app.core.types import AgentOutput, RunEventData, RunEventType
 
 logger = logging.getLogger(__name__)
@@ -84,8 +85,26 @@ class DAGExecutor:
                 emit=emit,
             )
 
-            logger.debug("DAG executing node %r", node_name)
-            output = await node.agent.run(ctx)
+            # Each node is its own span so it shows up in the tree and can be
+            # cancelled individually.
+            parent_span = current_span_id.get()
+            child_span = span_registry.open(
+                run_id=run_id, kind="dag_node",
+                agent=node.agent.name, parent_span_id=parent_span,
+            )
+            await emit(RunEventData(
+                run_id=run_id, seq=0, type=RunEventType.AGENT_START,
+                agent=node.agent.name,
+                span_id=child_span, parent_span_id=parent_span,
+                payload={"kind": "dag_node", "node": node_name},
+            ))
+            token = current_span_id.set(child_span)
+            try:
+                logger.debug("DAG executing node %r", node_name)
+                output = await node.agent.run(ctx)
+            finally:
+                current_span_id.reset(token)
+                span_registry.close(child_span)
             upstream[node_name] = output
             last_output = output
 

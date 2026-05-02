@@ -99,4 +99,9 @@ class RunEventData:
     type: RunEventType
     agent: str | None
     payload: dict
+    # Span-tree fields. span_id is the unit-of-work this event belongs to;
+    # parent_span_id links into the spawn tree. Both nullable for events
+    # emitted before the root span opens (e.g. early validation errors).
+    span_id: str | None = None
+    parent_span_id: str | None = None
     ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
