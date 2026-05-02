@@ -28,7 +28,6 @@ from app.core.types import (
 )
 from app.models.client import model_client
 from app.skills.registry import Skill
-from app.tools.base import BaseTool
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +51,12 @@ class BaseAgent(ABC):
         name: str,
         model: str,
         system_prompt: str,
-        tool_names: list[str] | None = None,
         skill_names: list[str] | None = None,
         reasoning: bool = False,
     ) -> None:
         self.name = name
         self.model = model
         self.system_prompt = system_prompt
-        self.tool_names: list[str] = tool_names or []
         self.skill_names: list[str] = skill_names or []
         self.reasoning = reasoning
 
@@ -84,9 +81,8 @@ class LLMAgent(BaseAgent):
                          agent=self.name, payload={"mode": "dag"})
         )
         user_msg = _build_dag_prompt(ctx)
-        all_callables = list(ctx.tools) + list(ctx.skills)
         output = await self._llm_loop(
-            user_msg, all_callables, ctx.run_id, ctx.emit,
+            user_msg, list(ctx.skills), ctx.run_id, ctx.emit,
             task_id=ctx.task_id,
         )
         await ctx.emit(
@@ -104,9 +100,9 @@ class LLMAgent(BaseAgent):
         if ctx.curated_context:
             user_msg = f"{ctx.task_description}\n\n---\nContext from orchestrator:\n{ctx.curated_context}"
 
-        # Peer agents surface as tools so the LLM can call them naturally
-        peer_tools = [_PeerCallTool(n, fn) for n, fn in ctx.peers.items()]
-        all_callables = list(ctx.tools) + list(ctx.skills) + peer_tools
+        # Peer agents surface as skills so the LLM can call them naturally.
+        peer_skills = [_PeerCallTool(n, fn) for n, fn in ctx.peers.items()]
+        all_callables = list(ctx.skills) + peer_skills
 
         output = await self._llm_loop(
             user_msg, all_callables, ctx.run_id, ctx.emit,
@@ -128,7 +124,7 @@ class LLMAgent(BaseAgent):
     async def _llm_loop(
         self,
         user_message: str,
-        callables: list,          # BaseTool | Skill | _PeerCallTool
+        callables: list[Skill],   # bundled / marketplace / peer-wrapping skills
         run_id: str,
         emit,
         max_steps: int = _DEFAULT_MAX_STEPS,
@@ -386,33 +382,35 @@ def _build_dag_prompt(ctx: DAGContext) -> str:
     return "\n\n".join(parts) if parts else "Begin."
 
 
-async def _call_callable(tc: ToolCall, callables: list) -> ToolResult:
-    # LLM returns the sanitized wire_name; match against both wire_name and name
+async def _call_callable(tc: ToolCall, callables: list[Skill]) -> ToolResult:
+    """Resolve a tool_call against the agent's available skills and execute.
+
+    Every callable visible to the LLM is a Skill — bundled, marketplace, or a
+    PeerCallSkill wrapping a peer agent. The LLM returns the sanitized
+    wire_name, so we match that first and fall back to the raw name.
+    """
     for c in callables:
-        if getattr(c, "wire_name", c.name) == tc.name or c.name == tc.name:
+        if c.wire_name == tc.name or c.name == tc.name:
             try:
-                if isinstance(c, Skill):
-                    content = await c.execute(**tc.args)
-                else:
-                    content = await c.call(**tc.args)
+                content = await c.execute(**tc.args)
                 return ToolResult(tool_call_id=tc.id, content=str(content))
             except Exception as exc:
                 return ToolResult(tool_call_id=tc.id, content=str(exc), is_error=True)
-    return ToolResult(tool_call_id=tc.id, content=f"Unknown tool: {tc.name!r}", is_error=True)
+    return ToolResult(tool_call_id=tc.id, content=f"Unknown skill: {tc.name!r}", is_error=True)
 
 
-class _PeerCallTool(BaseTool):
-    """
-    Wraps a peer agent's callable so the orchestrator's LLM can invoke it
-    as a standard tool call.
-    """
+def _PeerCallTool(agent_name: str, call_fn) -> Skill:
+    """Wrap a peer agent's callable as a Skill so the orchestrator's LLM can
+    invoke it through the same tool-call surface as any other skill."""
 
-    def __init__(self, agent_name: str, call_fn) -> None:
-        self.name = f"call_{agent_name}"
-        self.description = (
-            f"Delegate a sub-task to the {agent_name} agent and receive its response."
-        )
-        self.parameters = {
+    async def _execute(task: str, context: str = "") -> str:
+        output: AgentOutput = await call_fn(task=task, context=context)
+        return output.content
+
+    return Skill(
+        name=f"call_{agent_name}",
+        description=f"Delegate a sub-task to the {agent_name} agent and receive its response.",
+        parameters={
             "type": "object",
             "properties": {
                 "task": {
@@ -425,9 +423,6 @@ class _PeerCallTool(BaseTool):
                 },
             },
             "required": ["task"],
-        }
-        self._call_fn = call_fn
-
-    async def call(self, task: str, context: str = "") -> str:
-        output: AgentOutput = await self._call_fn(task=task, context=context)
-        return output.content
+        },
+        _execute=_execute,
+    )

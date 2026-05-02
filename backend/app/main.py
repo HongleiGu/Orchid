@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,65 +27,26 @@ async def lifespan(app: FastAPI):
     import app.db.models  # noqa: F401
     from app.db.session import engine  # imported here so it's available on shutdown
 
-    # 2. Register built-in tools
-    from app.tools.registry import tool_registry
-    from app.tools.builtin.web_search import WebSearchTool
-    from app.tools.builtin.http_request import HttpRequestTool
-    from app.tools.builtin.generate_image import GenerateImageTool
-    from app.tools.builtin.text_to_speech import TextToSpeechTool
-    from app.tools.builtin.wechat import WeChatPublishTool, WeChatFollowersTool, WeChatUploadImageTool
-    from app.tools.builtin.gmail import GmailSendTool, GmailReadTool
-    from app.tools.builtin.replicate_gen import ReplicateGenerateImagesTool
-
-    tool_registry.register(WebSearchTool())
-    tool_registry.register(HttpRequestTool())
-    tool_registry.register(GenerateImageTool())
-    tool_registry.register(TextToSpeechTool())
-    tool_registry.register(WeChatPublishTool())
-    tool_registry.register(WeChatUploadImageTool())
-    tool_registry.register(WeChatFollowersTool())
-    tool_registry.register(GmailSendTool())
-    tool_registry.register(GmailReadTool())
-    tool_registry.register(ReplicateGenerateImagesTool())
-
-    from app.tools.builtin.vault import VaultWriteTool, VaultReadTool, VaultSearchTool
-    tool_registry.register(VaultWriteTool())
-    tool_registry.register(VaultReadTool())
-    tool_registry.register(VaultSearchTool())
-
-    # 3. Load built-in skills
-    from app.skills.registry import skill_registry
-
-    builtin_skills_dir = Path(__file__).parent / "skills" / "builtin"
-    skill_registry.load_from_dir(builtin_skills_dir, prefix="@orchid/")
-
-    if settings.extra_skills_dir:
-        skill_registry.load_from_dir(settings.extra_skills_dir, prefix="@orchid/")
-
-    # 4. Register bundled skills (run in skill-runner sandbox, proxied via HTTP)
+    # 2. Register bundled skills as RemoteSkill proxies. Every executable the
+    #    LLM can call lives in skill-runner; the backend only holds proxies.
     from app.skills.bundled_loader import register_bundled_skills
     bundled_count = register_bundled_skills()
     logger.info("Registered %d bundled skills", bundled_count)
 
-    # 6. Load MCP servers (if configured)
-    if settings.mcp_config_path:
-        from app.mcp.registry import load_mcp_servers
-        await load_mcp_servers(settings.mcp_config_path)
-
-    # 7. Start WebSocket manager
+    # 3. Start WebSocket manager
     from app.ws.manager import ws_manager
     await ws_manager.startup()
 
-    # 8. Start the run consumer (single sequential queue worker).
+    # 4. Start the run consumer (single sequential queue worker).
     #    Also recovers any runs left in `running` from a previous crash.
     from app.executor.run_executor import start_consumer
     await start_consumer()
 
-    # 9. Start scheduler
+    # 5. Start scheduler
     from app.scheduler.service import startup as scheduler_startup
     await scheduler_startup()
 
-    # 10. Re-register marketplace proxies from DB
+    # 6. Re-register marketplace proxies from DB
     from app.marketplace.service import marketplace
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:

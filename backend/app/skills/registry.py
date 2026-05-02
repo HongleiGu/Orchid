@@ -1,37 +1,32 @@
 """
-Skill registry — loads skill folders at startup.
+Skill registry — the only execution-surface abstraction the agent sees.
 
-Each skill lives in its own directory:
-    skills/builtin/my_skill/
-        SKILL.md      ← YAML frontmatter: name, description, parameters
-        execute.py    ← defines:  async def execute(**kwargs) -> str
+Every skill is a remote skill: it lives in skill-runner (either as a bundled
+package shipped with Orchid or a marketplace package installed via npm). The
+registry holds RemoteSkill proxies; this module also defines the Skill base
+class that those proxies inherit from.
 
-SKILL.md format:
-    ---
-    name: my_skill
-    description: One-line description shown to the LLM.
-    parameters:
-      type: object
-      properties:
-        param_a:
-          type: string
-          description: ...
-      required:
-        - param_a
-    ---
+There are no local in-process skills. The previous load_from_dir path that
+loaded `app/skills/builtin/<name>/execute.py` directly into the backend
+process has been removed — it muddied the security boundary and meant two
+ways to ship a skill.
 """
 from __future__ import annotations
 
-import importlib.util
 import logging
-import sys
+import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Awaitable, Callable
 
-import yaml
-
 logger = logging.getLogger(__name__)
+
+
+def sanitize_skill_name(name: str) -> str:
+    """Convert a namespaced name to an LLM-safe identifier.
+    '@orchid/vault_write' → 'orchid__vault_write'
+    '@author/skill-foo'   → 'author__skill-foo'
+    """
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", name).strip("_")
 
 
 @dataclass
@@ -43,8 +38,7 @@ class Skill:
 
     @property
     def wire_name(self) -> str:
-        from app.tools.base import sanitize_tool_name
-        return sanitize_tool_name(self.name)
+        return sanitize_skill_name(self.name)
 
     async def execute(self, **kwargs) -> str:
         return await self._execute(**kwargs)
@@ -61,7 +55,7 @@ class Skill:
 
     def to_anthropic_spec(self) -> dict:
         return {
-            "name": self.name,
+            "name": self.wire_name,
             "description": self.description,
             "input_schema": self.parameters,
         }
@@ -91,58 +85,8 @@ class SkillRegistry:
     def names(self) -> list[str]:
         return list(self._skills.keys())
 
-    def load_from_dir(self, directory: Path, prefix: str = "") -> None:
-        """Scan a directory and load every valid skill subfolder."""
-        if not directory.exists():
-            return
-        for skill_dir in sorted(directory.iterdir()):
-            if not skill_dir.is_dir():
-                continue
-            md_path = skill_dir / "SKILL.md"
-            py_path = skill_dir / "execute.py"
-            if not md_path.exists() or not py_path.exists():
-                continue
-            try:
-                skill = _load_skill(skill_dir, md_path, py_path)
-                if prefix:
-                    skill.name = f"{prefix}{skill.name}"
-                self.register(skill)
-                logger.debug("Loaded skill %r from %s", skill.name, skill_dir)
-            except Exception:
-                logger.warning("Failed to load skill from %s", skill_dir, exc_info=True)
-
-
-def _parse_skill_md(path: Path) -> dict:
-    """Extract YAML frontmatter between --- delimiters."""
-    text = path.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    if lines and lines[0].strip() == "---":
-        try:
-            end = lines.index("---", 1)
-            return yaml.safe_load("\n".join(lines[1:end])) or {}
-        except (ValueError, yaml.YAMLError):
-            pass
-    return {}
-
-
-def _load_skill(skill_dir: Path, md_path: Path, py_path: Path) -> Skill:
-    meta = _parse_skill_md(md_path)
-    name = meta.get("name") or skill_dir.name
-    description = meta.get("description") or name
-    parameters = meta.get("parameters") or {
-        "type": "object",
-        "properties": {},
-        "required": [],
-    }
-
-    module_name = f"_skill_{skill_dir.name}"
-    spec = importlib.util.spec_from_file_location(module_name, py_path)
-    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)  # type: ignore[union-attr]
-
-    execute_fn: Callable = getattr(module, "execute")
-    return Skill(name=name, description=description, parameters=parameters, _execute=execute_fn)
+    def deregister(self, name: str) -> bool:
+        return self._skills.pop(name, None) is not None
 
 
 # Module-level singleton

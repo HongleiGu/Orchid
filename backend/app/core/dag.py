@@ -47,7 +47,6 @@ class DAGExecutor:
         task_id: str,
         run_id: str,
         inputs: dict,
-        tools: list,
         skills: list,
         emit: Callable,
     ) -> AgentOutput:
@@ -81,7 +80,6 @@ class DAGExecutor:
                 run_id=run_id,
                 inputs=inputs,
                 upstream={k: v for k, v in upstream.items()},
-                tools=tools,
                 skills=skills,
                 emit=emit,
             )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from pathlib import Path
 from typing import Literal
 
 from pydantic import field_validator
@@ -74,10 +73,6 @@ class Settings(BaseSettings):
     scheduler_max_concurrent_runs: int = 5
     default_max_turns_per_agent: int = 5
     default_max_total_turns: int = 20
-
-    # ── Extension dirs ────────────────────────────────────────────────────────
-    extra_skills_dir: Path | None = None
-    mcp_config_path: Path | None = None
 
     @property
     def cors_origins(self) -> list[str]:

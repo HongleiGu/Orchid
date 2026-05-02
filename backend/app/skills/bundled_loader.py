@@ -1,9 +1,11 @@
 """
-Auto-loads bundled skills from backend/app/skills/bundled/ into the
-skill-runner sandbox and registers RemoteSkill proxies in the agent framework.
+Auto-loads bundled skills from backend/app/skills/bundled/ and registers
+RemoteSkill proxies in the agent framework. The same directory is bind-mounted
+into skill-runner so every registered proxy has a corresponding loaded skill
+on the runner side.
 
-Bundled skills use the @orchid/ namespace and are always available —
-no marketplace install needed.
+Bundled skills use the @orchid/ namespace and are always available — no
+marketplace install needed.
 """
 from __future__ import annotations
 
@@ -13,7 +15,6 @@ from pathlib import Path
 from app.marketplace.proxy import RemoteSkill
 from app.marketplace.validator import validate_package
 from app.skills.registry import skill_registry
-from app.tools.registry import tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -38,27 +39,14 @@ def register_bundled_skills() -> int:
             continue
 
         registry_name = f"{_NAMESPACE}{skill_dir.name}"
-
-        if validation.pkg_type == "tool":
-            from app.marketplace.proxy import RemoteTool
-            proxy = RemoteTool(
-                name=registry_name,
-                description=validation.description,
-                parameters=validation.parameters,
-                runner_name=validation.name,
-            )
-            tool_registry.register(proxy)
-        else:
-            proxy = RemoteSkill(
-                name=registry_name,
-                description=validation.description,
-                parameters=validation.parameters,
-                runner_name=validation.name,
-            )
-            skill_registry.register(proxy)
-
-        logger.info("Registered bundled %s %r → runner:%r",
-                     validation.pkg_type, registry_name, validation.name)
+        proxy = RemoteSkill(
+            name=registry_name,
+            description=validation.description,
+            parameters=validation.parameters,
+            runner_name=validation.name,
+        )
+        skill_registry.register(proxy)
+        logger.info("Registered bundled skill %r → runner:%r", registry_name, validation.name)
         count += 1
 
     return count

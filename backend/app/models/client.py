@@ -50,7 +50,7 @@ class ModelClient:
         model: str,
         system: str,
         history: list[Message],
-        tools: list,          # list[BaseTool | Skill] — anything with .to_openai_spec()
+        tools: list,          # list[Skill] — anything with .to_openai_spec()
         user_message: str = "",
     ) -> ModelResponse:
         """

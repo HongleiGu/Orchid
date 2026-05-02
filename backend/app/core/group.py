@@ -40,7 +40,6 @@ class GroupExecutor:
         task_id: str,
         run_id: str,
         task_description: str,
-        tools: list,        # tools available to ALL agents
         skills: list,       # skills available to ALL agents
         emit: Callable,
     ) -> AgentOutput:
@@ -87,7 +86,6 @@ class GroupExecutor:
                     task_description=task,
                     curated_context=context,
                     peers={},           # workers cannot call other workers
-                    tools=tools,
                     skills=skills,
                     turns_remaining=group.max_turns_per_agent - agent_calls,
                     emit=emit,
@@ -106,7 +104,6 @@ class GroupExecutor:
             task_description=task_description,
             curated_context="",
             peers=peers,
-            tools=tools,
             skills=skills,
             turns_remaining=group.max_total_turns,
             emit=emit,

@@ -33,7 +33,6 @@ from app.db.models.run import Run, RunEvent
 from app.db.models.task import Task
 from app.db.session import AsyncSessionLocal
 from app.skills.registry import skill_registry
-from app.tools.registry import tool_registry
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -308,20 +307,25 @@ async def _load_agent_orm(agent_id: str) -> AgentORM:
 
 
 def _orm_to_llm_agent(orm: AgentORM) -> LLMAgent:
+    # Legacy `tools` column is preserved on the Agent ORM but means the same
+    # thing as `skills` now — both are skill names resolved via skill_registry.
+    legacy_tools = list(orm.tools or [])
+    skills = list(orm.skills or [])
+    merged: list[str] = []
+    for name in legacy_tools + skills:
+        if name not in merged:
+            merged.append(name)
     return LLMAgent(
         name=orm.name,
         model=orm.model or settings.llm_default_model,
         system_prompt=orm.system_prompt,
-        tool_names=list(orm.tools or []),
-        skill_names=list(orm.skills or []),
+        skill_names=merged,
         reasoning=getattr(orm, "reasoning", False),
     )
 
 
-def _resolve_tools_skills(agent: LLMAgent):
-    tools = tool_registry.resolve(agent.tool_names) if agent.tool_names else []
-    skills = skill_registry.resolve(agent.skill_names) if agent.skill_names else []
-    return tools, skills
+def _resolve_skills(agent: LLMAgent):
+    return skill_registry.resolve(agent.skill_names) if agent.skill_names else []
 
 
 async def _run_single(task: Task, run_id: str, emit, override_inputs: dict | None = None) -> AgentOutput:
@@ -329,7 +333,7 @@ async def _run_single(task: Task, run_id: str, emit, override_inputs: dict | Non
         raise ValueError("Single-agent task has no agent_id")
     orm = await _load_agent_orm(task.agent_id)
     agent = _orm_to_llm_agent(orm)
-    tools, skills = _resolve_tools_skills(agent)
+    skills = _resolve_skills(agent)
 
     from app.core.context import DAGContext
     ctx = DAGContext(
@@ -337,7 +341,6 @@ async def _run_single(task: Task, run_id: str, emit, override_inputs: dict | Non
         run_id=run_id,
         task_description=task.description or task.name,
         inputs=override_inputs if override_inputs is not None else (task.inputs or {}),
-        tools=tools,
         skills=skills,
         emit=emit,
     )
@@ -350,15 +353,12 @@ async def _run_dag(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
     entry: str = cfg.get("entry", node_cfgs[0]["name"] if node_cfgs else "")
 
     nodes: dict[str, DAGNode] = {}
-    all_tools: list = []
     all_skills: list = []
 
     for nc in node_cfgs:
         orm = await _load_agent_orm(nc["agent_id"])
         agent = _orm_to_llm_agent(orm)
-        t, s = _resolve_tools_skills(agent)
-        all_tools.extend(t)
-        all_skills.extend(s)
+        all_skills.extend(_resolve_skills(agent))
         nodes[nc["name"]] = DAGNode(name=nc["name"], agent=agent)
 
     edges = [DAGEdge(source=e["source"], target=e["target"]) for e in edge_cfgs]
@@ -367,7 +367,6 @@ async def _run_dag(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
     return await DAGExecutor().execute(
         dag=dag, task_id=task.id, run_id=run_id,
         inputs=task.inputs or {},
-        tools=list({t.name: t for t in all_tools}.values()),
         skills=list({s.name: s for s in all_skills}.values()),
         emit=emit,
     )
@@ -383,21 +382,15 @@ async def _run_group(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
     orchestrator = _orm_to_llm_agent(orch_orm)
 
     workers: dict[str, LLMAgent] = {}
-    all_tools: list = []
     all_skills: list = []
 
     for wid in worker_ids:
         orm = await _load_agent_orm(wid)
         agent = _orm_to_llm_agent(orm)
-        t, s = _resolve_tools_skills(agent)
-        all_tools.extend(t)
-        all_skills.extend(s)
+        all_skills.extend(_resolve_skills(agent))
         workers[orm.name] = agent
 
-    # Include orchestrator's own tools/skills too
-    ot, os_ = _resolve_tools_skills(orchestrator)
-    all_tools.extend(ot)
-    all_skills.extend(os_)
+    all_skills.extend(_resolve_skills(orchestrator))
 
     group = CollabGroup(
         orchestrator=orchestrator,
@@ -409,7 +402,6 @@ async def _run_group(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
     return await GroupExecutor().execute(
         group=group, task_id=task.id, run_id=run_id,
         task_description=task.description or task.name,
-        tools=list({t.name: t for t in all_tools}.values()),
         skills=list({s.name: s for s in all_skills}.values()),
         emit=emit,
     )
@@ -538,51 +530,49 @@ async def _run_passthrough(
 
     results: list[dict] = []
     for i, call_spec in enumerate(calls):
-        tool_name: str = call_spec.get("tool", "")
+        skill_name: str = call_spec.get("tool") or call_spec.get("skill", "")
         raw_args: dict = call_spec.get("args") or {}
         gate: str = call_spec.get("if", "")
 
         if gate:
             gate_val = ctx_vars.get(gate)
             if not gate_val:
-                results.append({"tool": tool_name, "skipped": True, "reason": f"gate '{gate}' was falsy"})
+                results.append({"tool": skill_name, "skipped": True, "reason": f"gate '{gate}' was falsy"})
                 continue
 
         try:
-            tool = tool_registry.get(tool_name)
+            skill = skill_registry.get(skill_name)
         except KeyError:
-            msg = f"passthrough: unknown tool {tool_name!r}"
+            msg = f"passthrough: unknown skill {skill_name!r}"
             logger.warning(msg)
-            results.append({"tool": tool_name, "ok": False, "error": msg})
+            results.append({"tool": skill_name, "ok": False, "error": msg})
             continue
 
         resolved = _resolve_template(raw_args, ctx_vars)
         if not isinstance(resolved, dict):
-            results.append({"tool": tool_name, "ok": False, "error": "args did not resolve to an object"})
+            results.append({"tool": skill_name, "ok": False, "error": "args did not resolve to an object"})
             continue
 
-        # Emit TOOL_CALL event. Truncate args preview so massive content doesn't spam the stream.
         preview = {k: (v[:200] + "…" if isinstance(v, str) and len(v) > 200 else v) for k, v in resolved.items()}
         await emit(RunEventData(
             run_id=run_id, seq=(i + 1) * 100, type=RunEventType.TOOL_CALL,
-            agent=None, payload={"tool": tool_name, "args": preview},
+            agent=None, payload={"tool": skill_name, "args": preview},
         ))
 
         try:
-            result_content = await tool.call(**resolved)
-            results.append({"tool": tool_name, "ok": True, "result_preview": str(result_content)[:200]})
+            result_content = await skill.execute(**resolved)
+            results.append({"tool": skill_name, "ok": True, "result_preview": str(result_content)[:200]})
             await emit(RunEventData(
                 run_id=run_id, seq=(i + 1) * 100 + 1, type=RunEventType.TOOL_RESULT,
-                agent=None, payload={"tool": tool_name, "result": str(result_content)[:500], "error": False},
+                agent=None, payload={"tool": skill_name, "result": str(result_content)[:500], "error": False},
             ))
         except Exception as exc:
-            logger.exception("passthrough tool %r failed", tool_name)
-            results.append({"tool": tool_name, "ok": False, "error": str(exc)})
+            logger.exception("passthrough skill %r failed", skill_name)
+            results.append({"tool": skill_name, "ok": False, "error": str(exc)})
             await emit(RunEventData(
                 run_id=run_id, seq=(i + 1) * 100 + 1, type=RunEventType.TOOL_RESULT,
-                agent=None, payload={"tool": tool_name, "result": str(exc), "error": True},
+                agent=None, payload={"tool": skill_name, "result": str(exc), "error": True},
             ))
-            # Continue to next call — partial delivery is better than aborting the whole step.
 
     # Summary as the step's "content" — short, so it doesn't inflate downstream pipeline context.
     parts = []

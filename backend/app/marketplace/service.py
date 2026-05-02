@@ -304,31 +304,20 @@ class MarketplaceService:
     # This guarantees no collision between built-in, local, and marketplace.
 
     def _register_proxy(self, registry_name: str, validation: ValidationResult) -> None:
-        """Register a RemoteSkill or RemoteTool into the appropriate registry.
-        Uses registry_name (npm_name) as the key, validation.name as the
+        """Register a RemoteSkill into the skill registry.
+        Uses registry_name as the lookup key, validation.name as the
         skill-runner execution name."""
-        from app.marketplace.proxy import RemoteSkill, RemoteTool
+        from app.marketplace.proxy import RemoteSkill
         from app.skills.registry import skill_registry
-        from app.tools.registry import tool_registry
 
-        if validation.pkg_type == "tool":
-            proxy = RemoteTool(
-                name=registry_name,
-                description=validation.description,
-                parameters=validation.parameters,
-                runner_name=validation.name,
-            )
-            tool_registry.register(proxy)
-            logger.info("Registered RemoteTool %r → runner:%r", registry_name, validation.name)
-        else:
-            proxy = RemoteSkill(
-                name=registry_name,
-                description=validation.description,
-                parameters=validation.parameters,
-                runner_name=validation.name,
-            )
-            skill_registry.register(proxy)
-            logger.info("Registered RemoteSkill %r → runner:%r", registry_name, validation.name)
+        proxy = RemoteSkill(
+            name=registry_name,
+            description=validation.description,
+            parameters=validation.parameters,
+            runner_name=validation.name,
+        )
+        skill_registry.register(proxy)
+        logger.info("Registered RemoteSkill %r → runner:%r", registry_name, validation.name)
 
     def _register_proxy_from_pkg(self, pkg: InstalledPackage) -> None:
         """Register proxy from an InstalledPackage DB record."""
@@ -343,15 +332,9 @@ class MarketplaceService:
         self._register_proxy(pkg.npm_name, v)
 
     def _deregister_proxy(self, npm_name: str, pkg_type: str) -> None:
-        """Remove a proxy from the registry by its npm_name key."""
+        """Remove a proxy from the skill registry by its npm_name key."""
         from app.skills.registry import skill_registry
-        from app.tools.registry import tool_registry
-
-        if pkg_type == "tool":
-            tool_registry._tools.pop(npm_name, None)
-            logger.info("Deregistered RemoteTool %r", npm_name)
-        else:
-            skill_registry._skills.pop(npm_name, None)
+        if skill_registry.deregister(npm_name):
             logger.info("Deregistered RemoteSkill %r", npm_name)
 
     async def register_all_from_db(self, db: AsyncSession) -> None:
