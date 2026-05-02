@@ -8,6 +8,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agentapp
       REDIS_URL: redis://redis:6379/0
       APP_CORS_ORIGINS: "http://localhost:${FRONTEND_PORT:-3000}"
+      VAULT_DIR: /app/vault
+      STATE_DIR: /app/data/state
     env_file:
       - .env
     depends_on:
@@ -33,6 +35,13 @@ services:
       - ./backend/data/packages/node_modules:/packages/node_modules:ro
       - ./backend/app/skills/bundled:/bundled:ro
       - ./vault:/vault
+      # Shared mutable state: OAuth tokens, cached IDs, etc. Backend's OAuth
+      # callbacks write here; skills running in the runner read from the same
+      # files. Read-write on both sides — there is no DB inside the runner.
+      - ./backend/data/state:/state
+    environment:
+      VAULT_DIR: /vault
+      STATE_DIR: /state
     env_file:
       - .env
     restart: unless-stopped

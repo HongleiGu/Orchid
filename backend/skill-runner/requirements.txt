@@ -2,3 +2,7 @@ fastapi>=0.115
 uvicorn[standard]>=0.32
 pyyaml>=6.0
 httpx>=0.27
+# Optional deps for bundled framework skills. If a marketplace package needs
+# something extra it ships its own requirements.txt (installed via /install-deps).
+tavily-python>=0.5
+replicate>=1.0

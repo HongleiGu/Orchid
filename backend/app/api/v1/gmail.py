@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.api.schemas import DataResponse
+from app.auth import gmail_oauth
 from app.config import get_settings
 
 router = APIRouter(prefix="/gmail", tags=["gmail"])
@@ -22,13 +23,11 @@ _SCOPES = "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com
 
 
 def _redirect_uri(request: Request) -> str:
-    """Build the OAuth redirect URI from the current request."""
     return str(request.url_for("gmail_callback"))
 
 
 @router.get("/auth")
 async def gmail_auth(request: Request):
-    """Start the Gmail OAuth consent flow."""
     s = get_settings()
     if not s.gmail_client_id:
         raise HTTPException(400, "GMAIL_CLIENT_ID not set in .env")
@@ -46,14 +45,11 @@ async def gmail_auth(request: Request):
 
 @router.get("/callback")
 async def gmail_callback(request: Request, code: str = ""):
-    """OAuth callback — exchange code for tokens."""
     if not code:
         raise HTTPException(400, "Missing authorization code")
 
-    from app.tools.builtin.gmail import save_initial_tokens
-
     try:
-        tokens = await save_initial_tokens(code, _redirect_uri(request))
+        await gmail_oauth.exchange_code(code, _redirect_uri(request))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -62,16 +58,12 @@ async def gmail_callback(request: Request, code: str = ""):
         "<h2>Gmail authorized successfully</h2>"
         "<p>You can close this tab and return to Orchid.</p>"
         "<p>The <code>@orchid/gmail_send</code> and <code>@orchid/gmail_read</code> "
-        "tools are now available.</p>"
+        "skills are now available.</p>"
         "</body></html>"
     )
 
 
 @router.get("/status", response_model=DataResponse[dict])
 async def gmail_status():
-    """Check if Gmail OAuth tokens are saved."""
-    from app.tools.builtin.gmail import _load_tokens_from_db
-
-    tokens = await _load_tokens_from_db()
-    authorized = bool(tokens.get("refresh_token"))
-    return DataResponse(data={"authorized": authorized})
+    tokens = gmail_oauth.load_tokens()
+    return DataResponse(data={"authorized": bool(tokens.get("refresh_token"))})

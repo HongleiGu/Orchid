@@ -30,11 +30,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import subprocess
 import sys
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+# Ensure /app (where skill_lib lives) is importable from dynamically loaded
+# skill modules. spec_from_file_location does not inherit cwd by default.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
