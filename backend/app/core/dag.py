@@ -145,10 +145,15 @@ class DAGExecutor:
         skills: list,
         emit: Callable,
     ) -> AgentOutput:
+        # Per-node `inputs` (declared in workflow_config) override task-level
+        # inputs for this node only. They show up in the agent's prompt
+        # alongside task params, so a reused agent can branch on them
+        # (e.g. paper_searcher with angle=recency vs angle=advances).
+        node_inputs = {**inputs, **(node.inputs or {})}
         ctx = DAGContext(
             task_id=task_id,
             run_id=run_id,
-            inputs=inputs,
+            inputs=node_inputs,
             upstream=upstream,
             skills=skills,
             emit=emit,

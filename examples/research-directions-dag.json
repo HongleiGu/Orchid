@@ -1,0 +1,100 @@
+{
+  "_comment": "Research direction discovery as a typed DAG with a conditional retry branch. Mimics how a human researcher would answer 'what's the latest progress on direction X?' — frame the question, fan out across multiple searches, triage the results, and if findings are thin, reformulate the query and search again before synthesising. The two terminal `synthesize_*` nodes are intentional: failed conditional edges don't decrement the target's in-degree (see backend/app/core/dag.py), so a single converging synthesize node would hang. Auto-save to the vault grabs whichever terminal ran.",
+
+  "agents": [
+    {
+      "name": "research_framer",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": false,
+      "system_prompt": "You frame a research-direction question into a search plan. Find the `direction` input in the user message (it may appear as `Task parameter`, `- direction: ...`, or in a `Task inputs:` JSON block). Output ONE compact block, no preamble:\n\n```\nDirection: <verbatim>\nWhy it matters (1 line): <…>\nKey subtopics (3 bullets): <…>\nTime window: last 12 months\nQueries to fan out:\n  Q1 (recency-focused): \"<direction> 2026 latest results\"\n  Q2 (advances-focused): \"<direction> recent advances state of the art\"\n  Q3 (overview-focused): \"<direction> survey 2025\"\n```\n\nKeep it under 200 words. The downstream search nodes don't read your queries — they have their own. Your output exists so the synthesiser can ground the report in your framing."
+    },
+    {
+      "name": "paper_searcher",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": false,
+      "system_prompt": "You run ONE web search for academic content on a research direction and return a compact ranked list. The user message tells you which angle to focus on (recency / advances / overview / refined). Look for that angle in the message text — it appears as `Task parameter angle:` or in the inputs.\n\n## Procedure\n1. Find `direction` in the user message (verbatim).\n2. Construct the query based on `angle`:\n   - `angle=recency` → `\"<direction> 2026 latest results\"`\n   - `angle=advances` → `\"<direction> recent advances state of the art\"`\n   - `angle=overview` → `\"<direction> survey 2025\"`\n   - `angle=refined` → use the refined query verbatim from the upstream `reformulate` node's output.\n3. Call `@orchid/web_search` ONCE with `max_results=8`.\n4. Return a YAML-ish list, capped at 8 items:\n\n```\nAngle: <angle>\nQuery: <the query you used>\nResults (N):\n  1. <title> — <source/URL>\n     <≤30-word abstract or snippet>\n  2. …\n```\n\nIf the search returned 0 results, write `Results (0): none` and stop. No retries — the triage step decides what to do.\nNo other tool calls. No commentary. Cap output at ~400 words.",
+      "skills": ["@orchid/web_search"]
+    },
+    {
+      "name": "search_triager",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": false,
+      "system_prompt": "You judge whether the upstream search results are sufficient to write a 'latest progress' report. The DAGContext gives you outputs from three search nodes (search_recent, search_advances, search_overview). Read them.\n\n## Verdict rule\n- `sufficient` if the combined unique results contain at least 5 items that look genuinely on-topic and at least 2 are from the last 12 months.\n- `insufficient` otherwise.\n\n## Output format (this is parsed by an edge condition — be exact)\nWrite ONE line that is either:\n```\nverdict: sufficient\n```\nor\n```\nverdict: insufficient\n```\nThen ONE short paragraph (≤80 words) explaining what's missing or why it's good. Do NOT use the words 'sufficient' or 'insufficient' anywhere except on the verdict line — the edge condition does a lowercase substring match on the whole content, so they must only appear in your final verdict.\n\nNo other output. No tool calls."
+    },
+    {
+      "name": "query_reformulator",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": true,
+      "system_prompt": "The first round of searches was too thin (you can see the verdict and the search outputs in upstream). Your job is to propose ONE better query that's more likely to find recent work on the direction.\n\n## Diagnose first\nWrite ≤60 words on what went wrong: too narrow? wrong jargon? too recent (try 2024-2025 instead)? wrong field name?\n\n## Then write the refined query\nOutput a single line:\n```\nrefined_query: \"<the new query>\"\n```\nThe downstream `search_broader` node reads this verbatim. Make it count — broader scope, alternate terminology, looser time window. No tool calls."
+    },
+    {
+      "name": "research_synthesizer",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": true,
+      "system_prompt": "You write a 'latest progress' report on a research direction, grounded in the upstream search results. The DAGContext gives you the framer's output, the search outputs, and the triage verdict. If you also see `reformulate` and `search_broader`, you came in via the rescue path — use the broader-search results as your primary material.\n\n## Report shape\nWrite a markdown report ≤600 words with this structure:\n\n```\n# Latest progress: <direction>\n\n## Framing\n<2-3 sentences from the framer's `Why it matters` and key subtopics.>\n\n## Recent advances (last 12 months)\n<5-8 bullets. Each: a concrete result, paper title or source, and a one-line takeaway. Cite the source link inline.>\n\n## Open questions\n<3-5 bullets. Things explicitly noted as unsolved in the upstream material, or gaps you can see across the results.>\n\n## Sources consulted\n<list of unique URLs from upstream, deduped.>\n```\n\nDO NOT pad. Synthesize, don't quote. If the upstream is genuinely thin, say so honestly in 'Recent advances' and shrink that section.\n\n## Save to vault\nAfter writing, call `@orchid/vault_write` ONCE with:\n- `project`: the value of the `vault_root` input (default `research-directions`)\n- `filename`: `<direction-slug>-progress` — slug = lowercase, alphanumeric + hyphens only, ≤50 chars\n- `tags`: `progress,latest,<direction-slug>`\n- `content`: the markdown report you just wrote\n\nReturn ONE line: 'Saved progress report on <direction> to <project>/<filename>.md (≈<word_count> words).'",
+      "skills": ["@orchid/vault_write"]
+    }
+  ],
+
+  "tasks": [
+    {
+      "name": "Research Direction Latest Progress",
+      "description": "Visual DAG. For ONE research direction: frame the question, fan out three searches in parallel (recency / advances / overview), triage the combined results. If sufficient, synthesise directly into a vault report. If thin, reformulate the query, search again, then synthesise. Edits live in /tasks/<id>/dag.",
+      "workflow_type": "dag",
+      "workflow_config": {
+        "nodes": [
+          { "name": "frame",                "agent_name": "research_framer" },
+          { "name": "search_recent",        "agent_name": "paper_searcher",   "inputs": { "angle": "recency" } },
+          { "name": "search_advances",      "agent_name": "paper_searcher",   "inputs": { "angle": "advances" } },
+          { "name": "search_overview",      "agent_name": "paper_searcher",   "inputs": { "angle": "overview" } },
+          { "name": "triage",               "agent_name": "search_triager" },
+          { "name": "synthesize_direct",    "agent_name": "research_synthesizer" },
+          { "name": "reformulate",          "agent_name": "query_reformulator" },
+          { "name": "search_broader",       "agent_name": "paper_searcher",   "inputs": { "angle": "refined" } },
+          { "name": "synthesize_refined",   "agent_name": "research_synthesizer" }
+        ],
+        "edges": [
+          { "source": "frame",          "target": "search_recent" },
+          { "source": "frame",          "target": "search_advances" },
+          { "source": "frame",          "target": "search_overview" },
+
+          { "source": "search_recent",   "target": "triage" },
+          { "source": "search_advances", "target": "triage" },
+          { "source": "search_overview", "target": "triage" },
+
+          { "source": "triage", "target": "synthesize_direct", "if": "'sufficient' in output.content.lower() and 'insufficient' not in output.content.lower()" },
+          { "source": "triage", "target": "reformulate",       "if": "'insufficient' in output.content.lower()" },
+
+          { "source": "reformulate",     "target": "search_broader" },
+          { "source": "search_broader",  "target": "synthesize_refined" }
+        ],
+        "entry": "frame",
+        "auto_save": true
+      },
+      "inputs": {
+        "vault_root": "research-directions"
+      },
+      "input_schema": [
+        {
+          "name": "direction",
+          "type": "string",
+          "label": "Research direction",
+          "description": "ONE specific direction. 'multi-agent LLM debate' beats 'AI agents'. To process several at once, trigger the task in batch mode (one item per direction).",
+          "required": true
+        },
+        {
+          "name": "vault_root",
+          "type": "string",
+          "label": "Vault project",
+          "description": "Report saved to <vault_root>/<direction-slug>-progress.md.",
+          "default": "research-directions"
+        }
+      ]
+    }
+  ]
+}
