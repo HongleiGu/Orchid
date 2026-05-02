@@ -211,10 +211,24 @@ async def _do_import(body: PipelineConfig, db: AsyncSession) -> ImportResult:
     for a in existing:
         name_to_id[a.name] = a.id
 
-    # 1. Create agents
+    # 1. Create or update agents. We update existing agents (matched by name)
+    # because the iteration loop is "edit JSON → re-import" — silently keeping
+    # the old definition because the name collides was a footgun that left
+    # stale prompts/skills in the DB and made debugging confusing.
     for ac in body.agents:
         if ac.name in name_to_id:
-            agents_skipped += 1
+            existing_agent = (
+                await db.execute(select(Agent).where(Agent.name == ac.name))
+            ).scalar_one_or_none()
+            if existing_agent:
+                existing_agent.role = ac.role
+                existing_agent.system_prompt = ac.system_prompt
+                existing_agent.model = ac.model
+                existing_agent.tools = ac.tools
+                existing_agent.skills = ac.skills
+                existing_agent.memory_strategy = ac.memory_strategy
+                existing_agent.reasoning = ac.reasoning
+                agents_skipped += 1  # name reused, but definition refreshed
             continue
         agent_id = str(ULID())
         db.add(Agent(
@@ -233,17 +247,15 @@ async def _do_import(body: PipelineConfig, db: AsyncSession) -> ImportResult:
 
     await db.flush()  # ensure agent IDs are available for task references
 
-    # Load existing tasks by name
+    # 2. Create or update tasks. Same rationale as agents: re-importing should
+    # refresh the definition, not silently keep the old one. Ongoing runs are
+    # not affected (the run_executor reads the task at claim time).
     existing_tasks = (await db.execute(select(Task))).scalars().all()
-    existing_task_names = {t.name for t in existing_tasks}
-
-    # 2. Create tasks
+    existing_tasks_by_name = {t.name: t for t in existing_tasks}
     for tc in body.tasks:
-        if tc.name in existing_task_names:
-            tasks_skipped += 1
-            continue
+        existing_task = existing_tasks_by_name.get(tc.name)
 
-        task_id = str(ULID())
+        task_id = str(ULID()) if existing_task is None else existing_task.id
         agent_id = None
         workflow_config: dict = {}
 
@@ -283,33 +295,61 @@ async def _do_import(body: PipelineConfig, db: AsyncSession) -> ImportResult:
                 if not aid:
                     errors.append(f"Task '{tc.name}': DAG node agent '{n.get('agent_name')}' not found")
                     continue
-                nodes.append({"name": n["name"], "agent_id": aid})
+                node_entry = {"name": n["name"], "agent_id": aid}
+                # Carry through optional per-node fields. `inputs` is the
+                # contract that lets a single agent be reused across multiple
+                # nodes with different parameters (see paper_searcher with
+                # angle=recency vs advances). Dropping these silently broke
+                # branched workflows.
+                if "inputs" in n:
+                    node_entry["inputs"] = n["inputs"]
+                if "outputs" in n:
+                    node_entry["outputs"] = n["outputs"]
+                if "position" in n:
+                    node_entry["position"] = n["position"]
+                nodes.append(node_entry)
             workflow_config = {
                 "nodes": nodes,
                 "edges": cfg.get("edges", []),
                 "entry": cfg.get("entry", ""),
             }
+            # Pass through any extra DAG-level fields (auto_save, etc.) so
+            # workflow-level switches survive the import round-trip.
+            for k in ("auto_save",):
+                if k in cfg:
+                    workflow_config[k] = cfg[k]
 
-        db.add(Task(
-            id=task_id,
-            name=tc.name,
-            description=tc.description,
-            workflow_type=tc.workflow_type,
-            workflow_config=workflow_config,
-            agent_id=agent_id,
-            inputs=tc.inputs,
-            input_schema=tc.input_schema,
-            cron_expr=tc.cron_expr,
-            default_priority=tc.default_priority,
-        ))
-        tasks_created += 1
+        if existing_task is None:
+            db.add(Task(
+                id=task_id,
+                name=tc.name,
+                description=tc.description,
+                workflow_type=tc.workflow_type,
+                workflow_config=workflow_config,
+                agent_id=agent_id,
+                inputs=tc.inputs,
+                input_schema=tc.input_schema,
+                cron_expr=tc.cron_expr,
+                default_priority=tc.default_priority,
+            ))
+            tasks_created += 1
+        else:
+            existing_task.description = tc.description
+            existing_task.workflow_type = tc.workflow_type
+            existing_task.workflow_config = workflow_config
+            existing_task.agent_id = agent_id
+            existing_task.inputs = tc.inputs
+            existing_task.input_schema = tc.input_schema
+            existing_task.cron_expr = tc.cron_expr
+            existing_task.default_priority = tc.default_priority
+            tasks_skipped += 1  # name reused, but definition refreshed
 
     await db.commit()
 
     # Schedule any cron tasks
     from app.scheduler.service import schedule_task
     for tc in body.tasks:
-        if tc.cron_expr and tc.name not in existing_task_names:
+        if tc.cron_expr and tc.name not in existing_tasks_by_name:
             # Look up the ID we just created
             result = await db.execute(select(Task.id).where(Task.name == tc.name))
             tid = result.scalar_one_or_none()
