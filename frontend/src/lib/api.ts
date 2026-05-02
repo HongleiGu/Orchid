@@ -9,6 +9,7 @@ import type {
   Run,
   SecretInfo,
   SecretUpdate,
+  SpanNode,
   Task,
   TaskCreate,
   TriggerOptions,
@@ -98,6 +99,13 @@ export const api = {
     cancel: (id: string) =>
       apiFetch<DataResponse<{ run_id: string; status: string }>>(
         `/api/v1/runs/${id}/cancel`,
+        { method: "POST" }
+      ),
+    spans: (id: string) =>
+      apiFetch<DataResponse<SpanNode[]>>(`/api/v1/runs/${id}/spans`),
+    cancelSpan: (runId: string, spanId: string) =>
+      apiFetch<DataResponse<{ span_id: string; cancelled: boolean }>>(
+        `/api/v1/runs/${runId}/spans/${spanId}/cancel`,
         { method: "POST" }
       ),
   },

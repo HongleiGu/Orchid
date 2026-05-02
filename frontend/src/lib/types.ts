@@ -56,11 +56,13 @@ export interface InputField {
 
 export type InputSchema = InputField[];
 
+export type WorkflowType = "single" | "dag" | "group";
+
 export interface Task {
   id: string;
   name: string;
   description: string;
-  workflow_type: "single" | "dag" | "group" | "pipeline" | "passthrough";
+  workflow_type: WorkflowType;
   workflow_config: Record<string, unknown>;
   agent_id: string | null;
   inputs: Record<string, unknown>;
@@ -76,13 +78,39 @@ export interface Task {
 export interface TaskCreate {
   name: string;
   description?: string;
-  workflow_type?: "single" | "dag" | "group" | "pipeline" | "passthrough";
+  workflow_type?: WorkflowType;
   workflow_config?: Record<string, unknown>;
   agent_id?: string | null;
   inputs?: Record<string, unknown>;
   input_schema?: InputSchema;
   cron_expr?: string | null;
   default_priority?: number;
+}
+
+// ── DAG workflow_config shape ───────────────────────────────────────────────
+
+export interface DagNodeConfig {
+  name: string;
+  agent_id: string;
+  inputs?: Record<string, unknown>;   // optional JSON-Schema-shaped contract
+  outputs?: Record<string, unknown>;
+  // Editor-only positional state. Backend ignores these fields.
+  position?: { x: number; y: number };
+}
+
+export interface DagEdgeConfig {
+  source: string;
+  target: string;
+  /** Optional Python expression evaluated against `output` on the source.
+   *  Edge fires only when truthy. Empty / undefined = unconditional. */
+  if?: string;
+}
+
+export interface DagWorkflowConfig {
+  nodes: DagNodeConfig[];
+  edges: DagEdgeConfig[];
+  entry?: string;
+  auto_save?: boolean;
 }
 
 export interface TriggerOptions {
@@ -102,8 +130,23 @@ export interface RunEvent {
   seq: number;
   type: string;
   agent: string | null;
+  span_id?: string | null;
+  parent_span_id?: string | null;
   payload: Record<string, unknown>;
   ts: string;
+}
+
+export type SpanKind = "agent" | "dag_node" | "peer_call";
+export type SpanStatus = "running" | "done" | "cancelled" | "failed";
+
+export interface SpanNode {
+  span_id: string;
+  parent_span_id: string | null;
+  kind: SpanKind;
+  agent: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  status: SpanStatus;
 }
 
 export interface Run {

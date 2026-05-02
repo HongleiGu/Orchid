@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
-import { Copy, Pencil, Play, Plus, Trash2, Layers } from "lucide-react";
+import { Copy, Network, Pencil, Play, Plus, Trash2, Layers } from "lucide-react";
 import { Badge, Button, Card, Empty, Input, Modal, Select, Textarea } from "@/components/ui";
 import {
   useAgents,
@@ -52,8 +52,6 @@ export default function TasksPage() {
   const [workerIds, setWorkerIds] = useState("");
   const [maxTurnsPerAgent, setMaxTurnsPerAgent] = useState(5);
   const [maxTotalTurns, setMaxTotalTurns] = useState(20);
-  // Pipeline config helpers
-  const [pipelineSteps, setPipelineSteps] = useState("");
   // Trigger modal
   const [triggerModalOpen, setTriggerModalOpen] = useState(false);
   const [triggerTask, setTriggerTask] = useState<Task | null>(null);
@@ -80,7 +78,6 @@ export default function TasksPage() {
     setWorkerIds("");
     setMaxTurnsPerAgent(5);
     setMaxTotalTurns(20);
-    setPipelineSteps("");
     setModalOpen(true);
   }
 
@@ -102,8 +99,6 @@ export default function TasksPage() {
     setWorkerIds(((cfg.worker_ids as string[]) ?? []).join(", "));
     setMaxTurnsPerAgent((cfg.max_turns_per_agent as number) ?? 5);
     setMaxTotalTurns((cfg.max_total_turns as number) ?? 20);
-    const steps = (cfg.steps as { task_name: string }[]) ?? [];
-    setPipelineSteps(steps.map((s) => s.task_name).join("\n"));
     setModalOpen(true);
   }
 
@@ -117,11 +112,12 @@ export default function TasksPage() {
         max_total_turns: maxTotalTurns,
       };
       f.agent_id = null;
-    } else if (f.workflow_type === "pipeline") {
-      const stepNames = pipelineSteps.split("\n").map((s) => s.trim()).filter(Boolean);
-      f.workflow_config = {
-        steps: stepNames.map((name) => ({ task_name: name })),
-      };
+    } else if (f.workflow_type === "dag") {
+      // DAG nodes/edges are authored in the visual editor at /tasks/{id}/dag.
+      // On create we leave the config empty; the user opens the editor to fill it in.
+      if (!f.workflow_config || Object.keys(f.workflow_config).length === 0) {
+        f.workflow_config = { nodes: [], edges: [] };
+      }
       f.agent_id = null;
     }
     return f;
@@ -396,6 +392,16 @@ export default function TasksPage() {
               <Button variant="ghost" size="sm" onClick={() => openTrigger(t)} title="Run with params or batch">
                 <Layers size={14} className="text-accent" />
               </Button>
+              {t.workflow_type === "dag" && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => router.push(`/tasks/${t.id}/dag`)}
+                  title="Open DAG editor"
+                >
+                  <Network size={14} className="text-accent" />
+                </Button>
+              )}
               <Button variant="ghost" size="sm" onClick={() => openEdit(t)}>
                 <Pencil size={14} />
               </Button>
@@ -438,8 +444,7 @@ export default function TasksPage() {
             >
               <option value="single">Single agent</option>
               <option value="group">Collaborative group</option>
-              <option value="dag">DAG pipeline</option>
-              <option value="pipeline">Chained pipeline</option>
+              <option value="dag">DAG (visual editor)</option>
             </Select>
           </div>
 
@@ -518,20 +523,13 @@ export default function TasksPage() {
             </>
           )}
 
-          {form.workflow_type === "pipeline" && (
-            <div>
-              <label className="text-xs font-medium text-muted">
-                Pipeline steps (one task name per line, executed in order)
-              </label>
-              <Textarea
-                rows={4}
-                value={pipelineSteps}
-                onChange={(e) => setPipelineSteps(e.target.value)}
-                placeholder={"Fetch AI Papers\nResearch Papers\nWrite Blog Post"}
-              />
-              <p className="text-xs text-muted mt-1">
-                Each step runs the named task. Output of step N is passed as
-                <code className="bg-background px-1 rounded">previous_output</code> to step N+1.
+          {form.workflow_type === "dag" && (
+            <div className="rounded-md border border-border bg-background p-3">
+              <p className="text-xs text-muted">
+                Nodes and edges are authored in the visual editor.{" "}
+                {editing
+                  ? "Save first, then click the DAG icon on the task to open it."
+                  : "Save the task first, then open the DAG editor from the task list."}
               </p>
             </div>
           )}

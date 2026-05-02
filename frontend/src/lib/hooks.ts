@@ -133,6 +133,36 @@ export function useCancelRun() {
   });
 }
 
+export function useRunSpans(runId: string, options?: { refetchInterval?: number | false }) {
+  return useQuery({
+    queryKey: ["runs", runId, "spans"],
+    queryFn: () => api.runs.spans(runId),
+    enabled: !!runId,
+    refetchInterval: options?.refetchInterval ?? false,
+  });
+}
+
+export function useCancelSpan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ runId, spanId }: { runId: string; spanId: string }) =>
+      api.runs.cancelSpan(runId, spanId),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ["runs", vars.runId, "spans"] });
+    },
+  });
+}
+
+// ── Single agent loader (used by the DAG editor) ─────────────────────────────
+
+export function useAllAgents() {
+  // The agents API is paginated at 20/page. The DAG editor needs a flat list
+  // to populate node pickers; for now we fetch the first page and trust that
+  // <20 agents covers the realistic case. Bump to a paginating loader if a
+  // user actually crosses the threshold.
+  return useAgents(1);
+}
+
 // ── Models & Providers ───────────────────────────────────────────────────────
 
 export function useModels() {
