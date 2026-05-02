@@ -89,7 +89,21 @@ async def start_consumer() -> None:
     _shutdown = False
     await _recover_interrupted_runs()
     _consumer_task = asyncio.create_task(_consumer_loop(), name="run-consumer")
+    # Attach a logger so a silent crash in the consumer loop is visible — without
+    # this, asyncio.create_task swallows the exception and runs queue forever.
+    _consumer_task.add_done_callback(_log_consumer_exit)
     logger.info("Run consumer started")
+
+
+def _log_consumer_exit(task: asyncio.Task) -> None:
+    if task.cancelled():
+        logger.info("Run consumer cancelled")
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Run consumer crashed — runs will pile up pending", exc_info=exc)
+    else:
+        logger.info("Run consumer exited cleanly")
 
 
 async def stop_consumer() -> None:
