@@ -88,6 +88,10 @@ The features that make people actually choose this over OpenClaw / forks.
 All of these depend on Tier 1 being clean.
 
 ### 2.1 Personal AI workflow/DAG maker
+**Status: started.** The first pass now drafts an import-ready `PipelineConfig`
+from a plain-language request, shows the generated plan/JSON in the frontend,
+and reports missing required/optional skills separately from the runnable draft.
+
 The main user-facing wedge. Orchid should help a single person turn fuzzy,
 recurring work into an explicit workflow they can inspect, edit, run, and reuse.
 This is not just a canvas; it is a workflow co-author.
@@ -111,6 +115,11 @@ This is not just a canvas; it is a workflow co-author.
   ~2 weeks for the polished editor + run-to-edit loop.
 
 ### 2.2 Skills ecosystem & AI skill writer
+**Status: started.** Skill Writer now drafts external `SKILL.md + execute.py`
+packages, surfaces required env vars instead of collecting credentials, writes
+detailed setup/test/security notes, and can save reviewed drafts under
+`backend/data/generated-skills/` for later marketplace install.
+
 The user-named pillar. Two halves:
 - **Skill writer agent** — given a description and example I/O, generates a
   scaffolded skill (SKILL.md + execute.py + tests), runs it in the sandbox,
@@ -160,6 +169,25 @@ Regression tests for agents/prompts. Without these, every prompt tweak
 Borrow the format Anthropic uses: fixture inputs + judge model rubric +
 threshold for pass. Wire into CI.
 - **Scope:** ~1 week for the harness; ongoing for fixture coverage.
+
+### 2.6.1 Skill checker harness
+Do this after the eval harness exists, not as part of the first Skill Writer
+slice. A useful checker should run generated or installed skills through the
+same sandbox contract production uses, not merely lint files.
+
+- **Static checks.** Validate `SKILL.md` frontmatter, JSON Schema parameters,
+  package layout, declared env vars, dependency list, timeout, and forbidden
+  filesystem/network patterns.
+- **Contract checks.** Execute fixture calls in skill-runner, assert string
+  outputs, structured setup errors for missing env vars, timeout behavior, and
+  no writes outside declared paths.
+- **LLM review.** Ask a judge model to inspect README/setup docs, failure
+  modes, credential handling, and whether the implementation matches the
+  declared skill contract.
+- **Why later:** without fixtures + runner-backed execution, the checker would
+  mostly be a style linter. With the harness, it becomes a quality gate for
+  Skill Writer output and signed registry publishing.
+- **Scope:** ~3-5 days once 2.6 is in place.
 
 ### 2.7 Air-gap / local-first deploy mode
 First-class support for running the framework with zero egress: BYO LLM via

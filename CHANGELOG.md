@@ -10,6 +10,18 @@ or `orchid 0.1.x`.
 
 ### Added
 - Added this changelog to track project and component-level version history.
+- Added a Workflow Maker page for drafting import-ready personal DAGs from a
+  natural-language request.
+- Added `/api/v1/workflow-maker/draft`, which asks the configured LLM to plan a
+  workflow, generate a `PipelineConfig`, and report missing required/optional
+  skills without breaking import.
+- Simplified the agent capability model to skills-only in the product surface:
+  the Agents UI no longer exposes a separate Tools picker, examples now use
+  `skills`, and create/update/import/export paths fold legacy `tools` values
+  into `skills`.
+- Added the first Skill Writer surface and `/api/v1/skill-writer/*` endpoints
+  for drafting external `SKILL.md + execute.py` packages with env-var
+  requirements and detailed setup/test documentation.
 
 ## 2026-05-08
 
@@ -46,4 +58,3 @@ or `orchid 0.1.x`.
 - Fixed DAG downstream nodes not seeing expected `previous_output` input.
 - Fixed arXiv calls being too sharp around the documented public API pacing,
   which could contribute to frequent 429s during parallel DAG runs.
-

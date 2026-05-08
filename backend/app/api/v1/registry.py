@@ -13,6 +13,7 @@ router = APIRouter(prefix="/registry", tags=["registry"])
 class RegisteredItem(BaseModel):
     name: str
     description: str
+    type: str = "skill"
     source: str       # "bundled" | "marketplace"
     parameters: dict
 
@@ -23,6 +24,7 @@ async def list_all():
         RegisteredItem(
             name=s.name,
             description=s.description,
+            type="skill",
             source="bundled" if s.name.startswith("@orchid/") else "marketplace",
             parameters=s.parameters,
         )

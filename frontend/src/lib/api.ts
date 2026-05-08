@@ -9,10 +9,16 @@ import type {
   Run,
   SecretInfo,
   SecretUpdate,
+  SaveSkillDraftResponse,
+  SkillDraft,
+  SkillFile,
+  SkillWriterRequest,
   SpanNode,
   Task,
   TaskCreate,
   TriggerOptions,
+  WorkflowDraft,
+  WorkflowDraftRequest,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -201,7 +207,7 @@ export const api = {
 
   registry: {
     all: () =>
-      apiFetch<DataResponse<{ name: string; description: string; type: string; source: string; parameters: Record<string, unknown> }[]>>(
+      apiFetch<DataResponse<{ name: string; description: string; type: "skill"; source: string; parameters: Record<string, unknown> }[]>>(
         "/api/v1/registry/all"
       ),
   },
@@ -215,6 +221,27 @@ export const api = {
         "/api/v1/config/import",
         { method: "POST", body: JSON.stringify(body) },
       ),
+  },
+
+  workflowMaker: {
+    draft: (body: WorkflowDraftRequest) =>
+      apiFetch<DataResponse<WorkflowDraft>>("/api/v1/workflow-maker/draft", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  },
+
+  skillWriter: {
+    draft: (body: SkillWriterRequest) =>
+      apiFetch<DataResponse<SkillDraft>>("/api/v1/skill-writer/draft", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    save: (body: { package_name: string; files: SkillFile[] }) =>
+      apiFetch<DataResponse<SaveSkillDraftResponse>>("/api/v1/skill-writer/save", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
   },
 };
 

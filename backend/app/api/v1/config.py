@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
@@ -34,7 +34,8 @@ class AgentConfig(BaseModel):
     role: str = "assistant"
     system_prompt: str = ""
     model: str | None = None
-    tools: list[str] = []
+    # Backward-compat input only. Serialized configs use `skills` exclusively.
+    tools: list[str] = Field(default_factory=list, exclude=True)
     skills: list[str] = []
     memory_strategy: str = "none"
     reasoning: bool = False
@@ -69,6 +70,15 @@ class ImportResult(BaseModel):
     errors: list[str]
 
 
+def _merge_skill_names(*groups: list[str] | None) -> list[str]:
+    merged: list[str] = []
+    for group in groups:
+        for name in group or []:
+            if name not in merged:
+                merged.append(name)
+    return merged
+
+
 # ── Export ────────────────────────────────────────────────────────────────────
 
 @router.get("/export", response_model=DataResponse[PipelineConfig])
@@ -90,8 +100,8 @@ async def export_config(db: AsyncSession = Depends(get_db)):
             role=a.role,
             system_prompt=a.system_prompt,
             model=a.model,
-            tools=list(a.tools or []),
-            skills=list(a.skills or []),
+            tools=[],
+            skills=_merge_skill_names(a.tools, a.skills),
             memory_strategy=a.memory_strategy,
             reasoning=a.reasoning,
         )
@@ -216,6 +226,7 @@ async def _do_import(body: PipelineConfig, db: AsyncSession) -> ImportResult:
     # the old definition because the name collides was a footgun that left
     # stale prompts/skills in the DB and made debugging confusing.
     for ac in body.agents:
+        agent_skills = _merge_skill_names(ac.tools, ac.skills)
         if ac.name in name_to_id:
             existing_agent = (
                 await db.execute(select(Agent).where(Agent.name == ac.name))
@@ -224,8 +235,8 @@ async def _do_import(body: PipelineConfig, db: AsyncSession) -> ImportResult:
                 existing_agent.role = ac.role
                 existing_agent.system_prompt = ac.system_prompt
                 existing_agent.model = ac.model
-                existing_agent.tools = ac.tools
-                existing_agent.skills = ac.skills
+                existing_agent.tools = []
+                existing_agent.skills = agent_skills
                 existing_agent.memory_strategy = ac.memory_strategy
                 existing_agent.reasoning = ac.reasoning
                 agents_skipped += 1  # name reused, but definition refreshed
@@ -237,8 +248,8 @@ async def _do_import(body: PipelineConfig, db: AsyncSession) -> ImportResult:
             role=ac.role,
             system_prompt=ac.system_prompt,
             model=ac.model,
-            tools=ac.tools,
-            skills=ac.skills,
+            tools=[],
+            skills=agent_skills,
             memory_strategy=ac.memory_strategy,
             reasoning=ac.reasoning,
         ))

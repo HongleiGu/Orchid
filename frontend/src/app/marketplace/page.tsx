@@ -82,7 +82,7 @@ export default function MarketplacePage() {
           </Button>
         </div>
         <p className="text-xs text-muted mt-2">
-          Packages must have a SKILL.md or TOOL.md at root with an execute.py entry point. Invalid packages are rejected automatically.
+          Packages must have a SKILL.md at root with an execute.py entry point. Invalid packages are rejected automatically.
         </p>
       </Card>
 

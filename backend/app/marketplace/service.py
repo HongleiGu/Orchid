@@ -238,7 +238,7 @@ class MarketplaceService:
         return None
 
     def _find_latest_pkg(self) -> Path | None:
-        """Scan node_modules for any package with a SKILL.md, TOOL.md, or mcp.json.
+        """Scan node_modules for any package with a SKILL.md.
         Used as fallback when npm_name doesn't match the directory (e.g. file: installs)."""
         if not NODE_MODULES.exists():
             return None
@@ -299,8 +299,8 @@ class MarketplaceService:
 
     # ── Proxy registration (bridges skill-runner ↔ agent framework) ───────────
     #
-    # Registry key = npm_name (e.g. "orchid-skill-weather", "@scope/tool-x")
-    # All Orchid tools/skills use "@orchid/name". External use "@author/name".
+    # Registry key = npm_name (e.g. "orchid-skill-weather", "@scope/skill-x")
+    # All Orchid skills use "@orchid/name". External use "@author/name".
     # This guarantees no collision between built-in, local, and marketplace.
 
     def _register_proxy(self, registry_name: str, validation: ValidationResult) -> None:
@@ -365,7 +365,7 @@ class MarketplaceService:
 
 
 def _is_orchid_pkg(d: Path) -> bool:
-    return (d / "SKILL.md").exists() or (d / "TOOL.md").exists() or (d / "mcp.json").exists()
+    return (d / "SKILL.md").exists()
 
 
 # Module-level singleton

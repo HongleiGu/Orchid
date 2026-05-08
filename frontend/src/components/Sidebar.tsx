@@ -2,13 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bot, ListChecks, Play, Settings, Home, Store, DollarSign, FolderOpen } from "lucide-react";
+import { Bot, ListChecks, Play, Settings, Home, Store, DollarSign, FolderOpen, Sparkles, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: Home },
   { href: "/agents", label: "Agents", icon: Bot },
   { href: "/tasks", label: "Tasks", icon: ListChecks },
+  { href: "/workflow-maker", label: "Workflow Maker", icon: Sparkles },
+  { href: "/skill-writer", label: "Skill Writer", icon: Wrench },
   { href: "/runs", label: "Runs", icon: Play },
   { href: "/vault", label: "Vault", icon: FolderOpen },
   { href: "/marketplace", label: "Marketplace", icon: Store },

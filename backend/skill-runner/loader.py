@@ -2,7 +2,7 @@
 Skill/tool loader for the skill-runner sandbox.
 
 Scans the shared /packages/node_modules directory for valid packages,
-loads their SKILL.md/TOOL.md metadata and execute.py entry points.
+loads their SKILL.md metadata and execute.py entry points.
 
 Supports:
   - Native format:  SKILL.md + execute.py
@@ -31,7 +31,7 @@ class LoadedSkill:
     name: str
     description: str
     parameters: dict
-    pkg_type: str  # "skill" | "tool"
+    pkg_type: str  # "skill"
     package_dir: Path
     execute_fn: Callable[..., Awaitable[str]]
     timeout: int = 30  # per-skill execution cap, seconds; from SKILL.md `timeout:`
@@ -49,7 +49,7 @@ def get_skill(name: str) -> LoadedSkill | None:
 
 
 def scan_and_load() -> dict[str, LoadedSkill]:
-    """Scan bundled + marketplace packages dirs and load all valid skills/tools."""
+    """Scan bundled + marketplace packages dirs and load all valid skills."""
     _loaded.clear()
 
     # 1. Load bundled skills (shipped with Orchid)
@@ -121,27 +121,18 @@ def _iter_package_dirs(root: Path):
 
 def _load_package(pkg_dir: Path) -> LoadedSkill | None:
     """Attempt to load a single package directory."""
-    # Detect type
     skill_md = pkg_dir / "SKILL.md"
-    tool_md = pkg_dir / "TOOL.md"
-
-    if skill_md.exists():
-        md_path = skill_md
-        pkg_type = "skill"
-    elif tool_md.exists():
-        md_path = tool_md
-        pkg_type = "tool"
-    else:
+    if not skill_md.exists():
         return None  # not a valid Orchid package
 
     # Find execute entry point
     execute_path = _find_execute(pkg_dir)
     if not execute_path:
-        logger.warning("Package %s has %s but no execute entry point", pkg_dir.name, md_path.name)
+        logger.warning("Package %s has SKILL.md but no execute entry point", pkg_dir.name)
         return None
 
     # Parse metadata
-    meta = _parse_md(md_path)
+    meta = _parse_md(skill_md)
     name = meta.get("name") or pkg_dir.name
     description = meta.get("description") or name
     parameters = meta.get("parameters") or {
@@ -158,7 +149,7 @@ def _load_package(pkg_dir: Path) -> LoadedSkill | None:
         name=name,
         description=description,
         parameters=parameters,
-        pkg_type=pkg_type,
+        pkg_type="skill",
         package_dir=pkg_dir,
         execute_fn=execute_fn,
         timeout=timeout,
@@ -179,7 +170,7 @@ def _find_execute(pkg_dir: Path) -> Path | None:
 
 
 def _parse_md(path: Path) -> dict:
-    """Extract YAML frontmatter from SKILL.md / TOOL.md."""
+    """Extract YAML frontmatter from SKILL.md."""
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
     if lines and lines[0].strip() == "---":

@@ -87,6 +87,95 @@ export interface TaskCreate {
   default_priority?: number;
 }
 
+export interface PipelineAgentConfig {
+  name: string;
+  role?: string;
+  system_prompt?: string;
+  model?: string | null;
+  tools?: string[];
+  skills?: string[];
+  memory_strategy?: string;
+  reasoning?: boolean;
+}
+
+export interface PipelineTaskConfig {
+  name: string;
+  description?: string;
+  workflow_type?: WorkflowType;
+  workflow_config?: Record<string, unknown>;
+  agent_name?: string | null;
+  inputs?: Record<string, unknown>;
+  input_schema?: InputSchema;
+  cron_expr?: string | null;
+  default_priority?: number;
+}
+
+export interface PipelineConfig {
+  skills: string[];
+  agents: PipelineAgentConfig[];
+  tasks: PipelineTaskConfig[];
+}
+
+export interface SkillNeed {
+  name: string;
+  reason: string;
+  alternative?: string | null;
+}
+
+export interface WorkflowDraftRequest {
+  description: string;
+  name?: string;
+  model?: string;
+}
+
+export interface WorkflowDraft {
+  plan: string[];
+  workflow: PipelineConfig;
+  required_skills: string[];
+  optional_skills: string[];
+  missing_required_skills: SkillNeed[];
+  missing_optional_skills: SkillNeed[];
+  notes: string[];
+}
+
+export interface SkillWriterRequest {
+  description: string;
+  name?: string;
+  model?: string;
+}
+
+export interface SkillEnvVar {
+  name: string;
+  required: boolean;
+  description: string;
+  example: string;
+}
+
+export interface SkillFile {
+  path: string;
+  content: string;
+}
+
+export interface SkillDraft {
+  package_name: string;
+  skill_name: string;
+  summary: string;
+  env_vars: SkillEnvVar[];
+  files: SkillFile[];
+  install_notes: string[];
+  test_plan: string[];
+  questions: string[];
+  limitations: string[];
+}
+
+export interface SaveSkillDraftResponse {
+  package_name: string;
+  directory: string;
+  install_target: string;
+  valid: boolean;
+  validation_error?: string | null;
+}
+
 // ── DAG workflow_config shape ───────────────────────────────────────────────
 
 export interface DagNodeConfig {

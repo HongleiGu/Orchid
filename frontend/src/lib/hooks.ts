@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import type { AgentCreate, BatchTriggerItem, SecretUpdate, TaskCreate, TriggerOptions } from "./types";
+import type { AgentCreate, BatchTriggerItem, SecretUpdate, SkillDraft, SkillWriterRequest, TaskCreate, TriggerOptions, WorkflowDraftRequest } from "./types";
 
 // ── Agents ───────────────────────────────────────────────────────────────────
 
@@ -150,6 +150,44 @@ export function useCancelSpan() {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ["runs", vars.runId, "spans"] });
     },
+  });
+}
+
+// ── Workflow Maker ───────────────────────────────────────────────────────────
+
+export function useDraftWorkflow() {
+  return useMutation({
+    mutationFn: (body: WorkflowDraftRequest) => api.workflowMaker.draft(body),
+  });
+}
+
+export function useImportConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: unknown) => api.config.import(body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["agents"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["registry"] });
+    },
+  });
+}
+
+// ── Skill Writer ─────────────────────────────────────────────────────────────
+
+export function useDraftSkill() {
+  return useMutation({
+    mutationFn: (body: SkillWriterRequest) => api.skillWriter.draft(body),
+  });
+}
+
+export function useSaveSkillDraft() {
+  return useMutation({
+    mutationFn: (draft: SkillDraft) =>
+      api.skillWriter.save({
+        package_name: draft.package_name,
+        files: draft.files,
+      }),
   });
 }
 

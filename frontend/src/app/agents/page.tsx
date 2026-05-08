@@ -15,7 +15,6 @@ const BLANK: AgentCreate = {
   role: "assistant",
   system_prompt: "",
   model: null,
-  tools: [],
   reasoning: false,
   skills: [],
 };
@@ -38,7 +37,6 @@ export default function AgentsPage() {
   const update = useUpdateAgent();
   const del = useDeleteAgent();
 
-  const availableTools = registry.data?.data.filter((r) => r.type === "tool") ?? [];
   const availableSkills = registry.data?.data.filter((r) => r.type === "skill") ?? [];
 
   function openCreate() {
@@ -54,8 +52,8 @@ export default function AgentsPage() {
       role: a.role,
       system_prompt: a.system_prompt,
       model: a.model,
-      tools: a.tools,
-      skills: a.skills,
+      tools: [],
+      skills: mergeSkillNames(a.tools, a.skills),
       reasoning: a.reasoning,
     });
     setModalOpen(true);
@@ -86,12 +84,12 @@ export default function AgentsPage() {
     }
   }
 
-  function toggleItem(field: "tools" | "skills", name: string) {
-    const current = form[field] ?? [];
+  function toggleSkill(name: string) {
+    const current = form.skills ?? [];
     const next = current.includes(name)
       ? current.filter((n) => n !== name)
       : [...current, name];
-    setForm({ ...form, [field]: next });
+    setForm({ ...form, tools: [], skills: next });
   }
 
   return (
@@ -116,14 +114,9 @@ export default function AgentsPage() {
               </div>
               <p className="text-xs text-muted mb-1">{a.model ?? "default model"}</p>
               <p className="text-sm text-muted">{truncate(a.system_prompt, 120) || "No prompt"}</p>
-              {(a.tools.length > 0 || a.skills.length > 0) && (
+              {mergeSkillNames(a.tools, a.skills).length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-2">
-                  {a.tools.map((t) => (
-                    <span key={t} className="text-xs bg-accent/10 text-accent px-2 py-0.5 rounded">
-                      {t}
-                    </span>
-                  ))}
-                  {a.skills.map((s) => (
+                  {mergeSkillNames(a.tools, a.skills).map((s) => (
                     <span key={s} className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded">
                       {s}
                     </span>
@@ -186,35 +179,6 @@ export default function AgentsPage() {
             />
           </div>
 
-          {/* Tools picker */}
-          <div>
-            <label className="text-xs font-medium text-muted">Tools</label>
-            <div className="flex flex-wrap gap-1.5 mt-1 p-2 border border-border rounded-md min-h-[36px]">
-              {availableTools.map((t) => {
-                const selected = form.tools?.includes(t.name);
-                return (
-                  <button
-                    key={t.name}
-                    type="button"
-                    title={t.description}
-                    onClick={() => toggleItem("tools", t.name)}
-                    className={`text-xs px-2 py-1 rounded transition-colors ${
-                      selected
-                        ? "bg-accent text-white"
-                        : "bg-accent/10 text-accent hover:bg-accent/20"
-                    }`}
-                  >
-                    {selected ? "✓ " : "+ "}{t.name.replace("@orchid/", "")}
-                    <span className="text-[10px] ml-1 opacity-60">{t.source}</span>
-                  </button>
-                );
-              })}
-              {availableTools.length === 0 && (
-                <span className="text-xs text-muted">No tools available</span>
-              )}
-            </div>
-          </div>
-
           {/* Skills picker */}
           <div>
             <label className="text-xs font-medium text-muted">Skills</label>
@@ -226,7 +190,7 @@ export default function AgentsPage() {
                     key={s.name}
                     type="button"
                     title={s.description}
-                    onClick={() => toggleItem("skills", s.name)}
+                    onClick={() => toggleSkill(s.name)}
                     className={`text-xs px-2 py-1 rounded transition-colors ${
                       selected
                         ? "bg-purple-600 text-white"
@@ -270,4 +234,14 @@ export default function AgentsPage() {
       </Modal>
     </>
   );
+}
+
+function mergeSkillNames(...groups: string[][]): string[] {
+  const merged: string[] = [];
+  for (const group of groups) {
+    for (const name of group) {
+      if (!merged.includes(name)) merged.push(name);
+    }
+  }
+  return merged;
 }

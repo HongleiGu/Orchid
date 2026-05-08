@@ -107,7 +107,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 
-from app.api.v1 import agents, tasks, runs, providers, models as models_router, config, marketplace, budget, gmail, registry, vault as vault_router  # noqa: E402
+from app.api.v1 import agents, tasks, runs, providers, models as models_router, config, marketplace, budget, gmail, registry, skill_writer, workflow_maker, vault as vault_router  # noqa: E402
 
 PREFIX = "/api/v1"
 app.include_router(agents.router, prefix=PREFIX)
@@ -120,6 +120,8 @@ app.include_router(marketplace.router, prefix=PREFIX)
 app.include_router(budget.router, prefix=PREFIX)
 app.include_router(gmail.router, prefix=PREFIX)
 app.include_router(registry.router, prefix=PREFIX)
+app.include_router(skill_writer.router, prefix=PREFIX)
+app.include_router(workflow_maker.router, prefix=PREFIX)
 app.include_router(vault_router.router, prefix=PREFIX)
 
 
