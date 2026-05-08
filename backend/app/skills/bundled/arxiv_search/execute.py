@@ -1,9 +1,14 @@
 """arxiv_search — query arxiv's public Atom API."""
 from __future__ import annotations
 
+import asyncio
+from email.utils import parsedate_to_datetime
 import logging
+import os
 import re
+import time
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 import httpx
@@ -12,6 +17,80 @@ logger = logging.getLogger(__name__)
 
 _API = "https://export.arxiv.org/api/query"
 _NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+
+# arxiv asks clients to make no more than one request every three seconds.
+# Multiple DAG nodes can fire this skill concurrently, so keep a single
+# process-wide lane for arxiv and add a small cushion above the documented
+# minimum. The in-memory cache also prevents LLM retry loops from repeating
+# identical searches during one runner lifetime.
+_MIN_INTERVAL = 3.5
+_MAX_RETRIES = 4
+_CACHE_TTL = 15 * 60
+_request_lock = asyncio.Lock()
+_last_request_time = 0.0
+_cooldown_until = 0.0
+_cache: dict[str, tuple[float, str]] = {}
+
+
+def _user_agent() -> str:
+    return os.environ.get("ARXIV_USER_AGENT", "Orchid/0.1 arxiv_search")
+
+
+def _retry_after_seconds(value: str | None, fallback: float) -> float:
+    if not value:
+        return fallback
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(value)
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+
+
+async def _throttled_get(url: str) -> httpx.Response:
+    global _last_request_time, _cooldown_until
+
+    now = time.monotonic()
+    cached = _cache.get(url)
+    if cached and now - cached[0] < _CACHE_TTL:
+        logger.info("arxiv_search cache hit")
+        return httpx.Response(200, text=cached[1], request=httpx.Request("GET", url))
+
+    resp: httpx.Response | None = None
+    for attempt in range(_MAX_RETRIES):
+        async with _request_lock:
+            now = time.monotonic()
+            if now < _cooldown_until:
+                await asyncio.sleep(_cooldown_until - now)
+
+            elapsed = time.monotonic() - _last_request_time
+            if elapsed < _MIN_INTERVAL:
+                await asyncio.sleep(_MIN_INTERVAL - elapsed)
+            _last_request_time = time.monotonic()
+
+            async with httpx.AsyncClient(timeout=30, headers={"User-Agent": _user_agent()}) as client:
+                resp = await client.get(url)
+
+        if resp.status_code != 429:
+            if resp.status_code == 200:
+                _cache[url] = (time.monotonic(), resp.text)
+            return resp
+
+        wait = _retry_after_seconds(
+            resp.headers.get("Retry-After"),
+            fallback=min(60.0, _MIN_INTERVAL * (2 ** (attempt + 1))),
+        )
+        _cooldown_until = max(_cooldown_until, time.monotonic() + wait)
+        logger.warning("arxiv_search got 429; backing off %.1fs (attempt %d/%d)", wait, attempt + 1, _MAX_RETRIES)
+        await asyncio.sleep(wait)
+
+    assert resp is not None
+    return resp
 
 
 async def execute(
@@ -32,9 +111,8 @@ async def execute(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(f"{_API}?{urlencode(params)}")
-            resp.raise_for_status()
+        resp = await _throttled_get(f"{_API}?{urlencode(params)}")
+        resp.raise_for_status()
     except Exception as exc:
         logger.error("arxiv_search HTTP error: %s", exc)
         return f"arxiv_search failed: {exc}"

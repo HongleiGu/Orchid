@@ -37,6 +37,17 @@ class RemoteSkill(Skill):
                 json={"skill_name": self._runner_name, "kwargs": kwargs},
             )
         data = resp.json()
+        # Skill-runner contract (API_VERSION=2): 4xx → {"detail": ErrorEnvelope},
+        # 200 → {"result", "error": ErrorEnvelope | None}.
+        if resp.status_code != 200:
+            envelope = data.get("detail") or {}
+            return _format_error(envelope)
         if data.get("error"):
-            return f"Error: {data['error']}"
+            return _format_error(data["error"])
         return data.get("result", "")
+
+
+def _format_error(envelope: dict) -> str:
+    code = envelope.get("code", "UNKNOWN")
+    message = envelope.get("message", "")
+    return f"Error [{code}]: {message}"

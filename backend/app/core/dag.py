@@ -73,6 +73,7 @@ class DAGExecutor:
         dag: DAGDefinition,
         task_id: str,
         run_id: str,
+        task_description: str,
         inputs: dict,
         skills: list,
         emit: Callable,
@@ -81,9 +82,11 @@ class DAGExecutor:
         allows. Returns the last node's output (or the merged final-frontier
         output if multiple terminals exist)."""
         successors: dict[str, list[DAGEdge]] = {n: [] for n in dag.nodes}
+        predecessors: dict[str, list[str]] = {n: [] for n in dag.nodes}
         in_degree: dict[str, int] = {n: 0 for n in dag.nodes}
         for edge in dag.edges:
             successors[edge.source].append(edge)
+            predecessors.setdefault(edge.target, []).append(edge.source)
             in_degree[edge.target] = in_degree.get(edge.target, 0) + 1
 
         upstream: dict[str, AgentOutput] = {}
@@ -104,8 +107,10 @@ class DAGExecutor:
                         node=dag.nodes[name],
                         task_id=task_id,
                         run_id=run_id,
+                        task_description=task_description,
                         inputs=inputs,
                         upstream=dict(upstream),  # snapshot; concurrent writes ok
+                        predecessor_names=predecessors.get(name, []),
                         skills=skills,
                         emit=emit,
                     )
@@ -140,8 +145,10 @@ class DAGExecutor:
         node: DAGNode,
         task_id: str,
         run_id: str,
+        task_description: str,
         inputs: dict,
         upstream: dict[str, AgentOutput],
+        predecessor_names: list[str],
         skills: list,
         emit: Callable,
     ) -> AgentOutput:
@@ -150,9 +157,13 @@ class DAGExecutor:
         # alongside task params, so a reused agent can branch on them
         # (e.g. paper_searcher with angle=recency vs angle=advances).
         node_inputs = {**inputs, **(node.inputs or {})}
+        previous_output = _format_previous_output(upstream, predecessor_names)
+        if previous_output and "previous_output" not in node_inputs:
+            node_inputs["previous_output"] = previous_output
         ctx = DAGContext(
             task_id=task_id,
             run_id=run_id,
+            task_description=task_description,
             inputs=node_inputs,
             upstream=upstream,
             skills=skills,
@@ -226,6 +237,26 @@ def _eval_condition(condition: Any, output: AgentOutput) -> bool:
             return False
 
     return False
+
+
+def _format_previous_output(
+    upstream: dict[str, AgentOutput],
+    predecessor_names: list[str],
+) -> str:
+    """Render direct predecessor output for legacy `previous_output` prompts.
+
+    DAG-aware prompts can read `ctx.upstream` via the "Outputs from previous DAG
+    nodes" block. Older pipeline-style prompts look specifically for a
+    `previous_output` input, so provide a stable compatibility value here. For a
+    single predecessor, pass the raw content through. For fan-in, label each
+    predecessor so the downstream node can distinguish sources.
+    """
+    direct = [(name, upstream[name]) for name in predecessor_names if name in upstream]
+    if not direct:
+        return ""
+    if len(direct) == 1:
+        return direct[0][1].content
+    return "\n\n".join(f"[{name}]\n{output.content}" for name, output in direct)
 
 
 class _OutputProxy:

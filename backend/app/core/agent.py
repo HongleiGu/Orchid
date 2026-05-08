@@ -356,7 +356,7 @@ def _build_dag_prompt(ctx: DAGContext) -> str:
     inputs = dict(ctx.inputs) if ctx.inputs else {}
     prev = inputs.pop("previous_output", None)
     if prev:
-        parts.append(f"---\nOutput from previous pipeline step:\n{prev}")
+        parts.append(f"---\nprevious_output:\n{prev}")
 
     # Render remaining inputs naturally
     if inputs:

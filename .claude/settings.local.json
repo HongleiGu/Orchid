@@ -43,7 +43,16 @@
       "Bash(python -c \"import json; json.load\\(open\\('examples/bedtime-story-pipeline.json', encoding='utf-8'\\)\\); print\\('OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/tools/builtin/liblib.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/tools/builtin/replicate_gen.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/executor/run_executor.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/executor/run_executor.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(python -m py_compile app/main.py app/core/agent.py app/core/dag.py app/core/group.py app/core/context.py app/executor/run_executor.py app/skills/registry.py app/skills/bundled_loader.py app/marketplace/proxy.py app/marketplace/service.py app/marketplace/validator.py app/api/v1/registry.py app/api/v1/gmail.py app/auth/gmail_oauth.py app/config.py app/models/client.py)",
+      "Bash(python -m py_compile app/main.py app/core/agent.py app/core/dag.py app/core/group.py app/core/context.py app/core/span.py app/core/types.py app/executor/run_executor.py app/api/v1/runs.py app/db/models/run.py)",
+      "Bash(python -m py_compile app/core/group.py app/core/dag.py app/api/v1/runs.py app/executor/run_executor.py)",
+      "Bash(python -m py_compile app/main.py app/core/agent.py app/core/dag.py app/core/group.py app/core/context.py app/core/span.py app/core/types.py app/executor/run_executor.py app/api/v1/runs.py app/api/v1/config.py app/api/v1/registry.py app/api/v1/gmail.py app/skills/registry.py app/skills/bundled_loader.py app/marketplace/proxy.py app/marketplace/service.py app/marketplace/validator.py app/db/models/run.py app/auth/gmail_oauth.py app/config.py app/models/client.py)",
+      "Bash(python -m py_compile app/core/dag.py)",
+      "Bash(python -m py_compile app/api/v1/config.py app/skills/bundled/arxiv_search/execute.py)",
+      "WebFetch(domain:www.harness.io)"
     ]
   }
 }
