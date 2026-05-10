@@ -36,6 +36,7 @@ from app.core.agent import BaseAgent
 from app.core.context import DAGContext
 from app.core.span import current_span_id, span_registry
 from app.core.types import AgentOutput, RunEventData, RunEventType
+from app.skills.registry import Skill
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 class DAGNode:
     name: str
     agent: BaseAgent
+    skills: list[Skill] = field(default_factory=list)
     # Optional JSON-Schema-shaped contracts. Validated only loosely (key
     # presence) — full schema validation can land later.
     inputs: dict | None = None
@@ -75,7 +77,6 @@ class DAGExecutor:
         run_id: str,
         task_description: str,
         inputs: dict,
-        skills: list,
         emit: Callable,
     ) -> AgentOutput:
         """Walk the DAG executing each node, fanning out where the topology
@@ -111,7 +112,6 @@ class DAGExecutor:
                         inputs=inputs,
                         upstream=dict(upstream),  # snapshot; concurrent writes ok
                         predecessor_names=predecessors.get(name, []),
-                        skills=skills,
                         emit=emit,
                     )
                     for name in frontier
@@ -149,7 +149,6 @@ class DAGExecutor:
         inputs: dict,
         upstream: dict[str, AgentOutput],
         predecessor_names: list[str],
-        skills: list,
         emit: Callable,
     ) -> AgentOutput:
         # Per-node `inputs` (declared in workflow_config) override task-level
@@ -166,7 +165,7 @@ class DAGExecutor:
             task_description=task_description,
             inputs=node_inputs,
             upstream=upstream,
-            skills=skills,
+            skills=node.skills,
             emit=emit,
         )
 

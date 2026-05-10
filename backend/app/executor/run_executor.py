@@ -408,15 +408,14 @@ async def _run_dag(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
     entry: str = cfg.get("entry", node_cfgs[0]["name"] if node_cfgs else "")
 
     nodes: dict[str, DAGNode] = {}
-    all_skills: list = []
 
     for nc in node_cfgs:
         orm = await _load_agent_orm(nc["agent_id"])
         agent = _orm_to_llm_agent(orm)
-        all_skills.extend(_resolve_skills(agent))
         nodes[nc["name"]] = DAGNode(
             name=nc["name"],
             agent=agent,
+            skills=_resolve_skills(agent),
             inputs=nc.get("inputs"),
             outputs=nc.get("outputs"),
         )
@@ -435,7 +434,6 @@ async def _run_dag(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
         dag=dag, task_id=task.id, run_id=run_id,
         task_description=task.description or task.name,
         inputs=task.inputs or {},
-        skills=list({s.name: s for s in all_skills}.values()),
         emit=emit,
     )
 

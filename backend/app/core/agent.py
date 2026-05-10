@@ -147,6 +147,9 @@ class LLMAgent(BaseAgent):
                 "1. What is being asked?\n"
                 "2. Which tools to use and in what order?\n"
                 "3. What does good output look like?\n\n"
+                "Planning only: do not answer the task, do not draft the final "
+                "artifact, and do not write tool-call markup or pretend a tool "
+                "has run. Mention intended tool names in prose only.\n\n"
                 "Be concise — max 200 words."
             )
             think_response = await model_client.complete(

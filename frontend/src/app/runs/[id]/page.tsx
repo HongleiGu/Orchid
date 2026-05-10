@@ -4,14 +4,14 @@ import { use } from "react";
 import Link from "next/link";
 import toast from "react-hot-toast";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, Download, RefreshCw, X } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui";
 import { ContentRenderer } from "@/components/ContentRenderer";
 import { useQuery } from "@tanstack/react-query";
 import { useCancelRun, useRun, useTriggerTask } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
-import type { RunEvent } from "@/lib/types";
+import type { Run, RunEvent } from "@/lib/types";
 
 const EVENT_COLORS: Record<string, string> = {
   agent_start: "border-l-blue-400",
@@ -58,17 +58,42 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
     }
   }
 
+  function handleExportLogs() {
+    if (!run) return;
+    try {
+      const exportedAt = new Date().toISOString();
+      const payload = buildRunLogExport(run, runUsage.data?.data ?? null, exportedAt);
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json;charset=utf-8",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `orchid-run-${run.id.slice(0, 12)}-${safeTimestamp(exportedAt)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      toast.success("Run logs exported");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to export logs");
+    }
+  }
+
   if (isLoading) return <p className="text-sm text-muted">Loading…</p>;
   if (!run) return <p className="text-sm text-danger">Run not found.</p>;
 
   return (
     <>
-      <div className="flex items-center gap-3 mb-6">
+      <div className="flex flex-wrap items-center gap-3 mb-6">
         <Link href="/runs">
           <Button variant="ghost" size="sm"><ArrowLeft size={16} /></Button>
         </Link>
         <h1 className="text-xl font-bold font-mono">{run.id.slice(0, 16)}…</h1>
         <Badge value={run.status} />
+        <Button variant="secondary" size="sm" onClick={handleExportLogs}>
+          <Download size={14} className="mr-1" /> Export Logs
+        </Button>
         {(run.status === "running" || run.status === "pending") && (
           <Button variant="danger" size="sm" onClick={handleCancel}>
             <X size={14} className="mr-1" /> Cancel
@@ -170,6 +195,36 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
       </div>
     </>
   );
+}
+
+function buildRunLogExport(
+  run: Run,
+  usage: { input_tokens: number; output_tokens: number; tokens: number; cost: number } | null,
+  exportedAt: string,
+) {
+  return {
+    schema: "orchid.run_logs.v1",
+    exported_at: exportedAt,
+    run: {
+      id: run.id,
+      task_id: run.task_id,
+      agent_id: run.agent_id,
+      status: run.status,
+      model_used: run.model_used,
+      created_at: run.created_at,
+      started_at: run.started_at,
+      finished_at: run.finished_at,
+      error: run.error,
+      result: run.result,
+    },
+    usage,
+    event_count: run.events?.length ?? 0,
+    events: run.events ?? [],
+  };
+}
+
+function safeTimestamp(value: string) {
+  return value.replace(/[:.]/g, "-");
 }
 
 function EventPayload({ payload, type }: { payload: Record<string, unknown>; type: string }) {
