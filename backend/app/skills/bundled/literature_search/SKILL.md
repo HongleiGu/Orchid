@@ -7,7 +7,19 @@ parameters:
   properties:
     query:
       type: string
-      description: "Academic search query, e.g. 'LLM agent tool failure recovery reflection'."
+      description: "Primary academic search query, e.g. 'LLM agent tool failure recovery reflection'."
+    queries:
+      type: array
+      items:
+        type: string
+      default: []
+      description: "Optional extra search queries. The skill searches all unique queries and deduplicates results."
+    arxiv_ids:
+      type: array
+      items:
+        type: string
+      default: []
+      description: "Optional canonical arXiv IDs to fetch directly, e.g. ['2303.11366', '2305.11738']."
     year_from:
       type: integer
       default: 2022
@@ -25,6 +37,8 @@ parameters:
   required: [query]
 ---
 
-Searches arXiv and OpenAlex, deduplicates by normalized title, and returns a
-compact markdown literature map. Semantic Scholar is opt-in because its
-unauthenticated API commonly returns `429 Too Many Requests`.
+Searches arXiv and OpenAlex across one or more queries, optionally fetches
+canonical arXiv IDs, deduplicates by normalized title, and returns a compact
+markdown literature map with coverage diagnostics and screening hints. Semantic
+Scholar is opt-in because its unauthenticated API commonly returns
+`429 Too Many Requests`.

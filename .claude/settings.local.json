@@ -52,7 +52,12 @@
       "Bash(python -m py_compile app/main.py app/core/agent.py app/core/dag.py app/core/group.py app/core/context.py app/core/span.py app/core/types.py app/executor/run_executor.py app/api/v1/runs.py app/api/v1/config.py app/api/v1/registry.py app/api/v1/gmail.py app/skills/registry.py app/skills/bundled_loader.py app/marketplace/proxy.py app/marketplace/service.py app/marketplace/validator.py app/db/models/run.py app/auth/gmail_oauth.py app/config.py app/models/client.py)",
       "Bash(python -m py_compile app/core/dag.py)",
       "Bash(python -m py_compile app/api/v1/config.py app/skills/bundled/arxiv_search/execute.py)",
-      "WebFetch(domain:www.harness.io)"
+      "WebFetch(domain:www.harness.io)",
+      "Bash(python -m py_compile backend/app/core/dag.py)",
+      "Bash(python -m py_compile backend/app/models/registry.py backend/app/budget/pricing.py)",
+      "WebFetch(domain:www.producthunt.com)",
+      "Bash(Get-ChildItem -Path 'd:\\\\Desktop\\\\study\\\\projects\\\\Orchid' -Directory)",
+      "Bash(Select-Object -ExpandProperty Name)"
     ]
   }
 }

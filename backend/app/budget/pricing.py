@@ -15,7 +15,9 @@ class ModelPricing:
 
 # Key = model ID as used in LiteLLM (prefix/model)
 _PRICING: dict[str, ModelPricing] = {
-    # Anthropic
+    # Anthropic — Opus 4.7 is reserved for the most demanding cases (high-stakes
+    # judges, final reports). Default workflows should select Sonnet 4.6.
+    "anthropic/claude-opus-4-7":   ModelPricing(15.0, 75.0),
     "anthropic/claude-opus-4-6":   ModelPricing(15.0, 75.0),
     "anthropic/claude-sonnet-4-6": ModelPricing(3.0, 15.0),
     "anthropic/claude-haiku-4-5-20251001": ModelPricing(0.80, 4.0),
@@ -26,11 +28,14 @@ _PRICING: dict[str, ModelPricing] = {
     # OpenRouter (same models, same pricing — OpenRouter adds ~0% markup for most)
     "openrouter/openai/gpt-4o-mini":              ModelPricing(0.15, 0.60),
     "openrouter/openai/gpt-4o":                   ModelPricing(2.50, 10.0),
-    "openrouter/anthropic/claude-opus-4.6":        ModelPricing(5.0, 25.0),
-    "openrouter/anthropic/claude-sonnet-4.6":        ModelPricing(3.0, 15.0),
+    "openrouter/anthropic/claude-opus-4-7":       ModelPricing(15.0, 75.0),
+    "openrouter/anthropic/claude-opus-4-6":       ModelPricing(15.0, 75.0),
+    "openrouter/anthropic/claude-sonnet-4-6":     ModelPricing(3.0, 15.0),
+    "openrouter/anthropic/claude-sonnet-4":       ModelPricing(3.0, 15.0),
     "openrouter/google/gemini-2.0-flash-001":      ModelPricing(0.10, 0.40),
     "openrouter/google/gemini-2.5-flash-preview":  ModelPricing(0.15, 0.60),
     "openrouter/meta-llama/llama-3.3-70b-instruct": ModelPricing(0.40, 0.40),
+    "openrouter/deepseek/deepseek-v4-flash":       ModelPricing(0.20, 0.80),
     "openrouter/deepseek/deepseek-chat-v3-0324":   ModelPricing(0.27, 1.10),
     "openrouter/qwen/qwen-2.5-72b-instruct":      ModelPricing(0.30, 0.30),
     # Groq (free tier / very cheap)

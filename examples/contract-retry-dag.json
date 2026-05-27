@@ -1,0 +1,98 @@
+{
+  "_comment": "Small DAG for testing future.md 2.8 runtime contract logs. Import this config, run the task, then inspect run_events / UI logs for contract_check events. Expected flow: draft_probe fails its contains check once, receives contract_feedback, retries, passes, then final_json_report runs.",
+  "agents": [
+    {
+      "name": "contract_probe_writer",
+      "role": "worker",
+      "model": null,
+      "reasoning": false,
+      "system_prompt": "You are testing Orchid DAG runtime contracts. Read the task inputs carefully.\n\nOn your FIRST attempt, when there is no `contract_feedback` input, write `Attempt: first`.\n\nOn a RETRY, when `contract_feedback` is present, fix the contract failure by writing `Attempt: retry`.\n\nAlways output markdown with exactly this shape:\n\n# Contract Probe Draft\n\n## Contract Probe\nAttempt: <first or retry>\n\n## Notes\nOne short sentence explaining whether contract feedback was present."
+    },
+    {
+      "name": "contract_probe_finisher",
+      "role": "worker",
+      "model": null,
+      "reasoning": false,
+      "system_prompt": "You receive the upstream draft in `previous_output` and in the DAG upstream context. Output ONLY a compact JSON object, no markdown fences and no prose. The JSON must include:\n\n{\n  \"status\": \"contract_complete\",\n  \"saw_retry\": true,\n  \"summary\": \"The upstream contract retry path completed.\"\n}\n\nSet `saw_retry` to true only if the upstream text contains `Attempt: retry`."
+    }
+  ],
+  "tasks": [
+    {
+      "name": "Contract Retry Log Probe",
+      "description": "Tiny DAG that exercises future.md 2.8 contract logs: a node intentionally fails a deterministic contains check once, retries with contract feedback, then feeds a JSON final node.",
+      "workflow_type": "dag",
+      "workflow_config": {
+        "nodes": [
+          {
+            "name": "draft_probe",
+            "agent_name": "contract_probe_writer",
+            "position": { "x": 120, "y": 120 },
+            "contract": {
+              "objective": "Produce a probe draft that marks the retry attempt after contract feedback is provided.",
+              "produces": {
+                "sections": [
+                  "## Contract Probe",
+                  "## Notes"
+                ]
+              },
+              "checks": [
+                {
+                  "type": "contains",
+                  "field": "content",
+                  "value": "Attempt: retry"
+                }
+              ],
+              "failure_modes": [
+                "missing retry attempt line",
+                "agent ignored contract feedback"
+              ],
+              "on_fail": "retry",
+              "on_blocked": "human_review",
+              "max_retries": 1
+            }
+          },
+          {
+            "name": "final_json_report",
+            "agent_name": "contract_probe_finisher",
+            "position": { "x": 480, "y": 120 },
+            "contract": {
+              "objective": "Return parseable JSON proving the upstream contract-gated node completed.",
+              "produces": {
+                "json": true
+              },
+              "checks": [
+                {
+                  "type": "contains",
+                  "field": "content",
+                  "value": "contract_complete"
+                }
+              ],
+              "on_fail": "annotate"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "source": "draft_probe",
+            "target": "final_json_report"
+          }
+        ],
+        "entry": "draft_probe",
+        "auto_save": false
+      },
+      "inputs": {
+        "probe_topic": "runtime contract logging"
+      },
+      "input_schema": [
+        {
+          "name": "probe_topic",
+          "type": "string",
+          "label": "Probe topic",
+          "description": "Optional label included in the task prompt.",
+          "default": "runtime contract logging",
+          "required": false
+        }
+      ]
+    }
+  ]
+}

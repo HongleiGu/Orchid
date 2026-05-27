@@ -204,6 +204,200 @@ self-test` that fails if anything tries to reach the public internet.
   commercial SaaS, so don't lead the early commercial pipeline with this —
   treat it as a moat that opens specific verticals later.
 
+### 2.8 DAG runtime contracts / harness checks
+Optional per-node verification contracts. No contract block = current behavior.
+When a node declares a contract, Orchid evaluates the node output before
+successors run. Think "runtime contract" more than offline eval harness.
+
+| Component         | Meaning                                      |
+| ----------------- | -------------------------------------------- |
+| `requires`        | required artifacts / capabilities            |
+| `produces`        | expected artifacts / evidence                |
+| `objective`       | epistemic goal of this node                  |
+| `checks`          | deterministic checks + optional LLM judge    |
+| `failure_modes`   | common pathologies to watch for              |
+| `policy`          | annotate / retry / stop / branch / review    |
+
+Design rules:
+- **Opt-in only.** Simple nodes stay lightweight. Contracts belong on high-risk
+  nodes: evidence collection, experiments, external side effects, final reports,
+  branch decisions, and anything that can overclaim.
+- **Deterministic first.** Required sections, JSON parseability, tool-call
+  existence, source count, artifact path, returncode, stdout shape, and exact
+  verdict lines should be checked without an LLM. Use judge models for
+  epistemic checks: "did this overclaim?", "is this evidence sufficient?",
+  "does this answer match the objective?"
+- **Separate verdict from policy.** A failed check should produce structured
+  metadata; the node contract decides whether that means annotate, retry, stop,
+  branch, or human review.
+- **Record everything in the trace.** Contract start/result/policy become
+  `run_events`, and the final `AgentOutput.metadata` carries the compact
+  verdict for downstream edges.
+
+Example:
+
+```json
+{
+  "contract": {
+    "objective": "Run the experiment or clearly mark it as dry-run/design-only.",
+    "checks": [
+      {"type": "contains", "field": "content", "value": "Execution fidelity"},
+      {
+        "type": "llm_judge",
+        "rubric": "If no real API/model call happened, the output must not present results as empirical evidence."
+      }
+    ],
+    "failure_modes": [
+      "fake tool result",
+      "empty stdout",
+      "synthetic fixture framed as empirical evidence"
+    ],
+    "on_fail": "retry",
+    "on_blocked": "human_review",
+    "max_retries": 1
+  }
+}
+```
+
+- **Scope:** first backend slice ~2-3 days; UI editor support ~2-3 more days.
+
+### 2.9 Human gates: pause / review / resume
+The contract system must leave room for the person. Some failures are not
+agent mistakes; they are real-world blockers: missing API keys, budget approval,
+network access, legal/ethics judgment, or a research-design decision. Orchid
+needs a first-class `paused_waiting_for_human` state rather than treating these
+as cancellation or ordinary failure.
+
+Runtime flow:
+1. Node runs.
+2. Contract evaluates.
+3. Verdict is `blocked_needs_secret`, `blocked_needs_budget`,
+   `blocked_needs_network`, `blocked_needs_external_access`,
+   `blocked_needs_design_decision`, or generic `blocked_needs_human`.
+4. Executor creates a pending human gate and pauses the run.
+5. UI shows a decision card with context, required capability, and choices.
+6. Human resolves the gate.
+7. Executor resumes from the paused node or routes to the chosen successor.
+
+Data model:
+
+```text
+Run.status:
+  queued | running | paused | completed | failed | cancelled
+
+HumanGate:
+  id
+  run_id
+  task_id
+  node_name
+  span_id
+  reason
+  required_capabilities
+  choices
+  context_summary
+  status: pending | resolved | cancelled
+  resolution_payload
+  created_at / resolved_at
+```
+
+Example gate:
+
+```json
+{
+  "reason": "Live OpenAI API experiment requires credentials and budget.",
+  "required_capabilities": {
+    "secrets": ["OPENAI_API_KEY"],
+    "network": true,
+    "budget_usd": 2
+  },
+  "choices": [
+    "provide_secret",
+    "approve_dry_run",
+    "revise_experiment",
+    "skip_experiment",
+    "cancel_run"
+  ]
+}
+```
+
+Resume semantics:
+- `provide_secret` — resume same node with the env var available, without ever
+  placing the secret value in the prompt.
+- `approve_dry_run` — resume same node with `dry_run_approved=true`; downstream
+  contracts must preserve `evidence_level=dry_run`.
+- `revise_experiment` — route back to design/refine node with the gate context.
+- `skip_experiment` — route to finalizer or partial-report node.
+- `cancel_run` — terminate intentionally.
+
+- **Why before freer experiments:** without pause/resume, agents work around
+  missing permissions, rewrite experiments into fixtures, or overclaim. Human
+  gates make permission boundaries explicit and resumable.
+- **Scope:** backend status/gate table/API ~3-5 days; minimal UI decision card
+  ~2-3 days; robust resume/fork UX pairs with replay debugger (2.5).
+
+### 2.10 Experiment workspace runner
+`python_experiment` is useful for quick inline scoring, but real research needs
+more freedom than a tiny script. Add a workspace-backed runner that still uses
+the current skill-runner container in OSS Orchid. The boundary is the
+environment, not a prompt-level or AST-level code policy.
+
+Principle:
+
+```text
+Do not restrict the code shape.
+Restrict the environment boundary.
+```
+
+Capabilities:
+- Per-run workspace: `/experiments/<run_id>/<node_name>/`.
+- Execute Python and shell commands with timeout, output caps, and resource
+  limits.
+- Write/read files inside the workspace; persist selected artifacts to vault.
+- Install declared dependencies when approved.
+- Clone or reuse open-source projects when network/git capability is approved.
+- Call external APIs only when required secrets, network, and budget gates are
+  resolved.
+- Capture `results.json`, logs, command transcript, generated plots, patches,
+  and dependency manifests.
+- Support iterative loops: hypothesis -> design -> run -> analyze -> refine /
+  pivot -> run again.
+
+Capability declaration:
+
+```json
+{
+  "requires": {
+    "workspace": true,
+    "network": true,
+    "git": true,
+    "dependencies": true,
+    "secrets": ["OPENAI_API_KEY"],
+    "budget_usd": 2
+  }
+}
+```
+
+Security / product line:
+- **OSS Orchid:** run inside the existing skill-runner container. Restart the
+  container if a run wedges it. Resource limits and timeouts are mandatory.
+- **`orchid-platform`:** later swaps the same runner contract onto per-run
+  microVMs (Tier 3.1). Do not block the OSS workbench on microVMs.
+- Secrets are injected as environment variables by the runtime after human
+  approval. The model sees the variable name, not the secret value.
+- Network and dependency installation are explicit gated capabilities, not
+  implicit defaults.
+
+Why this matters:
+- Avoids fake "experiments" that merely rehearse expected outputs.
+- Lets agents use real APIs, external datasets, and open-source baselines when
+  the human approves the risk/cost.
+- Makes self-improving/evolving research workflows artifact-driven and
+  traceable: changes are proposed as hypothesis revisions, patches, or contract
+  updates, not silent prompt drift.
+
+- **Scope:** minimal workspace runner ~1 week after human gates; dependency/git
+  support another ~1 week; artifact UI can follow.
+
 ---
 
 ## Tier 3 — `orchid-platform` launch (3-6 months)

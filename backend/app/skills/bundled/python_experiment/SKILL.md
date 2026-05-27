@@ -1,13 +1,13 @@
 ---
 name: python_experiment
-description: Run a small, stdlib-only Python experiment inside the skill-runner sandbox. Use for quick simulations, metric checks, synthetic-data experiments, and validation scripts. This is intentionally constrained: no filesystem access, network access, subprocesses, dynamic imports, or third-party packages.
+description: Run a small Python experiment inside the skill-runner container. Use for quick simulations, metric checks, synthetic-data experiments, and validation scripts. Execution is bounded by timeout, output caps, resource limits, and an isolated temporary working directory.
 timeout: 45
 parameters:
   type: object
   properties:
     code:
       type: string
-      description: "Complete Python code to run. Keep it self-contained and stdlib-only. Print JSON or concise text results to stdout."
+      description: "Complete Python code to run. Keep it self-contained. Print JSON or concise text results to stdout."
     timeout_seconds:
       type: integer
       default: 20
@@ -17,6 +17,8 @@ parameters:
   required: [code]
 ---
 
-Runs small Python experiments in an isolated temporary directory with a denylist
-AST check and process resource limits. This is for lightweight research probes,
-not for running untrusted production workloads or installing dependencies.
+Runs small Python experiments in an isolated temporary directory with process
+resource limits. The skill-runner container is the isolation boundary; Python
+syntax/runtime/import errors are returned as normal stderr instead of being
+pre-rejected by a separate AST policy layer. This is for lightweight research
+probes, not for installing dependencies or long-running workloads.

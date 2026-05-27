@@ -1,0 +1,173 @@
+{
+  "_comment": "Real-world DAG for exercising future.md 2.8 runtime contracts. Use it to review a vendor/security questionnaire from messy notes. Contracts verify parseable extraction JSON, required evidence/risk sections, an LLM judge for overclaiming, and a final parseable decision JSON.",
+  "agents": [
+    {
+      "name": "vendor_evidence_extractor",
+      "role": "worker",
+      "model": null,
+      "reasoning": false,
+      "system_prompt": "You turn messy vendor/security-review notes into conservative structured evidence.\n\nRead `vendor_name`, `review_goal`, and `raw_vendor_notes` from the task inputs. Extract only claims actually present in the notes. Do not infer certifications, controls, data residency, subprocessors, or breach history unless the notes explicitly say so.\n\nReturn ONLY parseable JSON, no markdown fences and no prose, with this exact top-level shape:\n{\n  \"vendor_name\": \"...\",\n  \"review_goal\": \"...\",\n  \"confirmed_facts\": [\"...\"],\n  \"missing_evidence\": [\"...\"],\n  \"red_flags\": [\"...\"],\n  \"data_categories\": [\"...\"],\n  \"open_questions\": [\"...\"]\n}\n\nRules:\n- `confirmed_facts` must be grounded in the notes.\n- `missing_evidence` must list important unknowns for the review goal.\n- `red_flags` can be empty only if the notes show no obvious concern.\n- Prefer `unknown` or an open question over guessing."
+    },
+    {
+      "name": "vendor_risk_assessor",
+      "role": "worker",
+      "model": null,
+      "reasoning": true,
+      "system_prompt": "You are a pragmatic security reviewer. Read the evidence JSON from `previous_output` and upstream context. Produce a concise markdown review that a busy engineering/security lead can act on.\n\nUse exactly these sections:\n\n# Vendor Security Review: <vendor_name>\n\n## Decision\nOne of: approve, approve_with_conditions, reject, needs_more_info. Include one sentence of rationale.\n\n## Evidence Used\nBullet list of concrete facts from the extraction JSON only.\n\n## Evidence Limits\nBullet list of missing or weak evidence. Be explicit about unknowns.\n\n## Risks\nBullet list of specific security, privacy, operational, or compliance risks.\n\n## Required Conditions\nBullet list of conditions before use. If none, write `- None`.\n\n## Open Questions\nBullet list of questions to send to the vendor or internal owner.\n\nRules:\n- Do not approve if critical evidence for the review goal is missing.\n- Do not present unknowns as facts.\n- If customer data, credentials, PHI, payment data, or production access are involved, be stricter.\n- Keep the whole review under 700 words."
+    },
+    {
+      "name": "vendor_decision_packet_writer",
+      "role": "worker",
+      "model": null,
+      "reasoning": false,
+      "system_prompt": "You convert the upstream markdown review into a compact machine-readable decision packet.\n\nReturn ONLY parseable JSON, no markdown fences and no prose, with this exact shape:\n{\n  \"vendor_name\": \"...\",\n  \"decision\": \"approve | approve_with_conditions | reject | needs_more_info\",\n  \"confidence\": \"low | medium | high\",\n  \"top_risks\": [\"...\"],\n  \"required_conditions\": [\"...\"],\n  \"open_questions\": [\"...\"],\n  \"evidence_limits\": [\"...\"],\n  \"next_owner\": \"security | legal | procurement | engineering | vendor\"\n}\n\nRules:\n- Preserve the decision from the risk review.\n- Confidence cannot be high if Evidence Limits contains important missing evidence.\n- Include at least one `evidence_limits` item unless the review explicitly says none."
+    }
+  ],
+  "tasks": [
+    {
+      "name": "Vendor Security Review With Contracts",
+      "description": "Review a vendor/security questionnaire from messy notes. The DAG uses runtime contracts to check extraction JSON, enforce evidence-limit sections, judge overclaiming, and validate final decision JSON before completion.",
+      "workflow_type": "dag",
+      "workflow_config": {
+        "nodes": [
+          {
+            "name": "extract_evidence",
+            "agent_name": "vendor_evidence_extractor",
+            "position": { "x": 100, "y": 140 },
+            "contract": {
+              "objective": "Extract only grounded vendor evidence and expose missing evidence as structured JSON.",
+              "produces": {
+                "json": true
+              },
+              "checks": [
+                { "type": "contains", "field": "content", "value": "\"confirmed_facts\"" },
+                { "type": "contains", "field": "content", "value": "\"missing_evidence\"" },
+                { "type": "contains", "field": "content", "value": "\"red_flags\"" },
+                { "type": "contains", "field": "content", "value": "\"open_questions\"" }
+              ],
+              "failure_modes": [
+                "invented vendor controls",
+                "missing unknowns",
+                "non-JSON output",
+                "red flags hidden in prose"
+              ],
+              "on_fail": "retry",
+              "max_retries": 1
+            }
+          },
+          {
+            "name": "assess_risk",
+            "agent_name": "vendor_risk_assessor",
+            "position": { "x": 460, "y": 140 },
+            "contract": {
+              "objective": "Produce a conservative security review that separates decision, evidence, limits, risks, and follow-up conditions.",
+              "requires": {
+                "artifacts": ["extract_evidence"]
+              },
+              "produces": {
+                "sections": [
+                  "## Decision",
+                  "## Evidence Used",
+                  "## Evidence Limits",
+                  "## Risks",
+                  "## Required Conditions",
+                  "## Open Questions"
+                ]
+              },
+              "checks": [
+                {
+                  "type": "llm_judge",
+                  "rubric": "Pass only if the review is grounded in the extracted evidence, does not convert unknowns into facts, and does not approve the vendor when critical evidence for the review goal is missing. Fail if it overclaims certifications, security posture, data handling, or compliance evidence."
+                }
+              ],
+              "failure_modes": [
+                "approval despite missing critical evidence",
+                "unknowns presented as facts",
+                "missing evidence limits",
+                "generic risk prose not tied to extracted facts"
+              ],
+              "on_fail": "retry",
+              "on_blocked": "human_review",
+              "max_retries": 1,
+              "human_review": {
+                "reason": "Security approval may need a human reviewer if the evidence is ambiguous or the judge blocks on policy/compliance judgment.",
+                "choices": [
+                  "request vendor answers",
+                  "approve with conditions",
+                  "reject",
+                  "escalate to security/legal"
+                ]
+              }
+            }
+          },
+          {
+            "name": "write_decision_packet",
+            "agent_name": "vendor_decision_packet_writer",
+            "position": { "x": 820, "y": 140 },
+            "contract": {
+              "objective": "Return a parseable final decision packet suitable for logging, ticketing, or procurement workflow automation.",
+              "requires": {
+                "artifacts": ["assess_risk"]
+              },
+              "produces": {
+                "json": true
+              },
+              "checks": [
+                { "type": "contains", "field": "content", "value": "\"decision\"" },
+                { "type": "contains", "field": "content", "value": "\"confidence\"" },
+                { "type": "contains", "field": "content", "value": "\"evidence_limits\"" },
+                { "type": "contains", "field": "content", "value": "\"next_owner\"" }
+              ],
+              "failure_modes": [
+                "invalid JSON",
+                "decision drift from risk review",
+                "missing evidence limits",
+                "unactionable next owner"
+              ],
+              "on_fail": "retry",
+              "max_retries": 1
+            }
+          }
+        ],
+        "edges": [
+          { "source": "extract_evidence", "target": "assess_risk" },
+          { "source": "assess_risk", "target": "write_decision_packet" }
+        ],
+        "entry": "extract_evidence",
+        "auto_save": false
+      },
+      "inputs": {
+        "vendor_name": "Acme Analytics",
+        "review_goal": "Decide whether this vendor can be used for a pilot that processes customer support tickets containing names, email addresses, and free-text issue descriptions.",
+        "raw_vendor_notes": "Vendor offers AI analytics for support tickets. They say data is encrypted in transit and at rest. SOC 2 Type II report is available under NDA but not attached. DPA is not signed yet. They use OpenAI and a cloud database as subprocessors; full subprocessor list was promised but not provided. They can disable training on customer data according to sales notes, but no contract language has been reviewed. EU data residency is unknown. SSO is available on enterprise plan. No breach history was provided. Pilot owner wants to upload a 500-ticket export next week."
+      },
+      "input_schema": [
+        {
+          "name": "vendor_name",
+          "type": "string",
+          "label": "Vendor name",
+          "description": "Name of the vendor being reviewed.",
+          "default": "Acme Analytics",
+          "required": true
+        },
+        {
+          "name": "review_goal",
+          "type": "textarea",
+          "label": "Review goal",
+          "description": "What decision this review should support.",
+          "default": "Decide whether this vendor can be used for a pilot that processes customer support tickets containing names, email addresses, and free-text issue descriptions.",
+          "required": true
+        },
+        {
+          "name": "raw_vendor_notes",
+          "type": "textarea",
+          "label": "Raw vendor notes",
+          "description": "Paste questionnaire answers, sales notes, security notes, or internal context.",
+          "default": "Vendor offers AI analytics for support tickets. They say data is encrypted in transit and at rest. SOC 2 Type II report is available under NDA but not attached. DPA is not signed yet. They use OpenAI and a cloud database as subprocessors; full subprocessor list was promised but not provided. They can disable training on customer data according to sales notes, but no contract language has been reviewed. EU data residency is unknown. SSO is available on enterprise plan. No breach history was provided. Pilot owner wants to upload a 500-ticket export next week.",
+          "required": true
+        }
+      ],
+      "default_priority": 0
+    }
+  ]
+}

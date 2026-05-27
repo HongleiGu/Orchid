@@ -28,8 +28,12 @@ class ProviderInfo:
     reachable: bool | None = None
 
 
+# Anthropic Opus 4.7 is the most capable + most expensive option here. Reserve
+# it for the most demanding cases: high-stakes judges, final-report drafting,
+# critical-path reasoning. Default workflows should pick Sonnet 4.6 or Haiku.
 _MODELS: list[ModelInfo] = [
     # Anthropic
+    ModelInfo("anthropic/claude-opus-4-7",    "anthropic", True, True, 200_000, 32_000),
     ModelInfo("anthropic/claude-opus-4-6",    "anthropic", True, True, 200_000, 32_000),
     ModelInfo("anthropic/claude-sonnet-4-6",  "anthropic", True, True, 200_000, 16_000),
     ModelInfo("anthropic/claude-haiku-4-5-20251001",  "anthropic", True, True, 200_000,  8_192),
@@ -41,12 +45,15 @@ _MODELS: list[ModelInfo] = [
     ModelInfo("groq/llama-3.3-70b-versatile", "groq",      True, False, 128_000,  8_000),
     ModelInfo("groq/llama-3.1-8b-instant",    "groq",      True, False, 128_000,  8_000),
     # OpenRouter (passthrough — model IDs are prefixed with openrouter/)
+    ModelInfo("openrouter/anthropic/claude-opus-4-7",       "openrouter", True,  True,    200_000, 32_000),
+    ModelInfo("openrouter/anthropic/claude-sonnet-4-6",     "openrouter", True,  True,    200_000, 16_000),
+    ModelInfo("openrouter/anthropic/claude-sonnet-4",       "openrouter", True,  True,    200_000, 16_000),
     ModelInfo("openrouter/google/gemini-2.0-flash-001",     "openrouter", True,  True,  1_048_576,  8_192),
     ModelInfo("openrouter/google/gemini-2.5-flash-preview", "openrouter", True,  True,  1_048_576,  8_192),
     ModelInfo("openrouter/openai/gpt-4o-mini",              "openrouter", True,  True,    128_000,  4_096),
     ModelInfo("openrouter/openai/gpt-4o",                   "openrouter", True,  True,    128_000,  4_096),
-    ModelInfo("openrouter/anthropic/claude-sonnet-4",       "openrouter", True,  True,    200_000, 16_000),
     ModelInfo("openrouter/meta-llama/llama-3.3-70b-instruct","openrouter", True, False,  128_000,  8_000),
+    ModelInfo("openrouter/deepseek/deepseek-v4-flash",      "openrouter", True,  False,  128_000,  8_000),
     ModelInfo("openrouter/deepseek/deepseek-chat-v3-0324",  "openrouter", True,  False,  128_000,  8_000),
     ModelInfo("openrouter/qwen/qwen-2.5-72b-instruct",     "openrouter", True,  False,  128_000,  8_000),
 ]

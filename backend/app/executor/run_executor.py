@@ -418,6 +418,7 @@ async def _run_dag(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
             skills=_resolve_skills(agent),
             inputs=nc.get("inputs"),
             outputs=nc.get("outputs"),
+            contract=nc.get("contract") or nc.get("harness"),
         )
 
     edges = [

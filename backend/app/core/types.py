@@ -84,6 +84,7 @@ class TerminationSignal:
 class RunEventType(str, Enum):
     AGENT_START = "agent_start"
     AGENT_END = "agent_end"
+    CONTRACT_CHECK = "contract_check"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     MESSAGE = "message"

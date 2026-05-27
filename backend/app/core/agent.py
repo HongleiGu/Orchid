@@ -130,7 +130,6 @@ class LLMAgent(BaseAgent):
         from app.budget.tracker import BudgetExceeded, check_budget, record_usage
 
         history: list[Message] = []
-        first_turn = True
         steps = 0
         tool_error_counts: dict[str, int] = {}
         disabled_tools: set[str] = set()
@@ -165,19 +164,27 @@ class LLMAgent(BaseAgent):
                 input_tokens=think_response.input_tokens,
                 output_tokens=think_response.output_tokens,
             )
+            planning_notes = _sanitize_reasoning_notes(think_response.content)
             await emit(RunEventData(
                 run_id=run_id, seq=0, type=RunEventType.MESSAGE,
                 agent=self.name,
-                payload={"content": f"[Reasoning]\n{think_response.content}", "tool_calls": 0},
+                payload={"content": f"[Reasoning]\n{planning_notes}", "tool_calls": 0},
             ))
             # Inject reasoning into the user message so the conversation starts
             # with one user turn. Faking an assistant turn here breaks providers
             # (e.g. Anthropic via Azure) that reject histories ending in assistant.
             user_message = (
                 f"{user_message}\n\n"
-                f"---\n[Your prior planning notes]\n{think_response.content}\n"
+                f"---\n[Your prior planning notes]\n{planning_notes}\n"
                 f"---\nNow execute the task."
             )
+
+        # Keep the original task in the conversation history. Previously it was
+        # only passed as a transient `user_message` on the first completion
+        # call, so follow-up calls after tool results could lose the task
+        # parameters and hallucinate that the input was empty.
+        if user_message:
+            history.append(Message(role="user", content=user_message))
 
         while steps < max_steps:
             # Check budget before each LLM call
@@ -213,9 +220,8 @@ class LLMAgent(BaseAgent):
                 system=system,
                 history=_trim_old_tool_results(history),
                 tools=active_callables,
-                user_message=user_message if first_turn else "",
+                user_message="",
             )
-            first_turn = False
             steps += 1
 
             # Record token usage
@@ -348,6 +354,38 @@ def _summarise_tool_result(content: str, is_error: bool) -> str:
     return f"[older {tag}, {len(content)} chars elided] {preview}..."
 
 
+def _sanitize_reasoning_notes(content: str) -> str:
+    """Keep the optional reasoning pass as planning, not a shadow execution.
+
+    Some models occasionally ignore the planning-only instruction and emit fake
+    tool-call markup or a full phase artifact. That text is especially harmful
+    when injected into the real task prompt, so trim at strong execution/draft
+    markers and leave a short diagnostic note.
+    """
+    text = (content or "").strip()
+    if not text:
+        return ""
+
+    markers = [
+        "\n<tool_call>",
+        "\n<function_calls>",
+        "\n<invoke ",
+        "\n<tool_response>",
+        "\n# Phase ",
+        "\n## Stage ",
+        "\nvault_write(",
+    ]
+    cut_at = min((idx for marker in markers if (idx := text.find(marker)) >= 0), default=-1)
+    if cut_at >= 0:
+        text = text[:cut_at].rstrip()
+        text += "\n\n[Planning note truncated: the reasoning pass began drafting output or tool-call markup.]"
+
+    max_chars = 1500
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "\n\n[Planning note truncated for length.]"
+    return text
+
+
 def _build_dag_prompt(ctx: DAGContext) -> str:
     import json as _json
 
@@ -391,11 +429,36 @@ async def _call_callable(tc: ToolCall, callables: list[Skill]) -> ToolResult:
     for c in callables:
         if c.wire_name == tc.name or c.name == tc.name:
             try:
+                missing = _missing_required_args(c, tc.args)
+                if missing:
+                    return ToolResult(
+                        tool_call_id=tc.id,
+                        content=(
+                            f"Tool call {tc.name!r} is missing required argument(s): "
+                            f"{', '.join(missing)}. Retry with a JSON object containing "
+                            "all required arguments from the tool schema."
+                        ),
+                        is_error=True,
+                    )
                 content = await c.execute(**tc.args)
                 return ToolResult(tool_call_id=tc.id, content=str(content))
             except Exception as exc:
                 return ToolResult(tool_call_id=tc.id, content=str(exc), is_error=True)
     return ToolResult(tool_call_id=tc.id, content=f"Unknown skill: {tc.name!r}", is_error=True)
+
+
+def _missing_required_args(skill: Skill, args: dict) -> list[str]:
+    """Return required JSON-schema fields absent from a model tool call."""
+    schema = getattr(skill, "parameters", {}) or {}
+    required = schema.get("required") or []
+    if not isinstance(required, list):
+        return []
+    supplied = args if isinstance(args, dict) else {}
+    return [
+        str(name)
+        for name in required
+        if str(name) not in supplied or supplied.get(str(name)) in (None, "")
+    ]
 
 
 def _PeerCallTool(agent_name: str, call_fn) -> Skill:

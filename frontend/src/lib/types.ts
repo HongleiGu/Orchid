@@ -181,8 +181,12 @@ export interface SaveSkillDraftResponse {
 export interface DagNodeConfig {
   name: string;
   agent_id: string;
-  inputs?: Record<string, unknown>;   // optional JSON-Schema-shaped contract
+  inputs?: Record<string, unknown>;
   outputs?: Record<string, unknown>;
+  /** Optional runtime verification contract. If omitted, the node is unchecked. */
+  contract?: Record<string, unknown>;
+  /** Back-compat alias accepted by the backend. Prefer `contract` for new DAGs. */
+  harness?: Record<string, unknown>;
   // Editor-only positional state. Backend ignores these fields.
   position?: { x: number; y: number };
 }

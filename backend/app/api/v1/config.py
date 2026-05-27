@@ -138,10 +138,14 @@ async def export_config(db: AsyncSession = Depends(get_db)):
             nodes = cfg.get("nodes", [])
             exported_nodes = []
             for n in nodes:
-                exported_nodes.append({
+                node_entry = {
                     "name": n.get("name", ""),
                     "agent_name": id_to_name.get(n.get("agent_id", ""), ""),
-                })
+                }
+                for key in ("inputs", "outputs", "contract", "harness", "position"):
+                    if key in n:
+                        node_entry[key] = n[key]
+                exported_nodes.append(node_entry)
             tc.workflow_config = {
                 "nodes": exported_nodes,
                 "edges": cfg.get("edges", []),
@@ -316,6 +320,10 @@ async def _do_import(body: PipelineConfig, db: AsyncSession) -> ImportResult:
                     node_entry["inputs"] = n["inputs"]
                 if "outputs" in n:
                     node_entry["outputs"] = n["outputs"]
+                if "contract" in n:
+                    node_entry["contract"] = n["contract"]
+                if "harness" in n:
+                    node_entry["harness"] = n["harness"]
                 if "position" in n:
                     node_entry["position"] = n["position"]
                 nodes.append(node_entry)
