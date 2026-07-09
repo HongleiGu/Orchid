@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import os
-import resource
 import sys
 import tempfile
 from pathlib import Path
+
+try:
+    import resource as _resource
+    _HAS_RESOURCE = True
+except ImportError:
+    _HAS_RESOURCE = False  # Windows — subprocess isolation + timeout still applies
 
 MAX_CODE_CHARS = 20_000
 MAX_OUTPUT_CHARS = 12_000
@@ -33,7 +38,7 @@ async def execute(code: str, timeout_seconds: int = 20) -> str:
             env={"PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            preexec_fn=_limit_child_process,
+            preexec_fn=_limit_child_process if _HAS_RESOURCE else None,
         )
         try:
             stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -53,13 +58,14 @@ async def execute(code: str, timeout_seconds: int = 20) -> str:
 
 
 def _limit_child_process() -> None:
-    # Keep experiment probes small even if model-generated code goes sideways.
-    resource.setrlimit(resource.RLIMIT_CPU, (35, 35))
-    resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (1 * 1024 * 1024, 1 * 1024 * 1024))
-    resource.setrlimit(resource.RLIMIT_NOFILE, (16, 16))
+    # Belt-and-suspenders OS limits on top of the subprocess sandbox.
+    # Only called on Unix where the resource module is available.
+    _resource.setrlimit(_resource.RLIMIT_CPU, (35, 35))
+    _resource.setrlimit(_resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+    _resource.setrlimit(_resource.RLIMIT_FSIZE, (1 * 1024 * 1024, 1 * 1024 * 1024))
+    _resource.setrlimit(_resource.RLIMIT_NOFILE, (16, 16))
     try:
-        resource.setrlimit(resource.RLIMIT_NPROC, (4, 4))
+        _resource.setrlimit(_resource.RLIMIT_NPROC, (4, 4))
     except (ValueError, OSError):
         pass
     os.umask(0o077)

@@ -36,7 +36,7 @@
       "role": "worker",
       "model": "openrouter/anthropic/claude-sonnet-4.6",
       "reasoning": true,
-      "system_prompt": "You run Phase D of a ResearchClaw-style autonomous research workflow.\n\nStages covered:\n9. EXPERIMENT_DESIGN [gate]\n10. CODE_GENERATION\n11. RESOURCE_PLANNING\n\nUse the selected hypothesis from `previous_output` / upstream node outputs. Do not run the experiment; this phase only designs it. Design a minimal, reproducible experiment for the selected hypothesis. For this Orchid v1 workflow, the runnable experiment must be stdlib-only Python suitable for the python_experiment skill: no file access, no network, no subprocesses, no third-party packages. Prefer falsifiable synthetic fixtures with deterministic scoring over Bernoulli parameters chosen to confirm the hypothesis. If a simulation is unavoidable, label it as power analysis or design rehearsal and set `passed` to false unless it uses pre-declared conservative lower-bound parameters.\n\nFor prompt-ablation hypotheses, include a length-matched wrong-content control whenever feasible. For literature-backed hypotheses, distinguish measured outcomes from assumed parameters.\n\nOutput markdown with exactly these sections:\n# Phase D: Experiment Design\n## Stage 09 EXPERIMENT_DESIGN [gate]\nFirst line must be one of:\ngate: pass\ngate: needs_human_review\nThen provide research question, independent/dependent variables, baselines, controls, metrics, sample size, assumptions, and stop criteria. Explicitly identify which results would be empirical versus simulated.\n\n## Stage 10 CODE_GENERATION\nProvide one fenced python code block. It must print a compact JSON object with fields: hypothesis, metric_name, baseline, treatment, delta, passed, notes. Keep runtime under 20 seconds. The code should be short enough to pass as a python_experiment `code` argument.\n\n## Stage 11 RESOURCE_PLANNING\nEstimate runtime, memory, external dependencies, expected cost range, and what would be needed for a larger real experiment.\n\n## Reproducibility Manifest\nList random seeds, parameters, fixture-generation rules, and exact success criterion.",
+      "system_prompt": "You run Phase D of a ResearchClaw-style autonomous research workflow.\n\nStages covered:\n9. EXPERIMENT_DESIGN [gate]\n10. CODE_GENERATION\n11. RESOURCE_PLANNING\n\nUse the selected hypothesis from `previous_output` / upstream node outputs. Do not run the experiment; this phase only designs it. Design a minimal, reproducible experiment for the selected hypothesis. For this Orchid v1 workflow, the runnable experiment must be stdlib-only Python suitable for the python_experiment skill: no file access, no network, no subprocesses, no third-party packages. Prefer falsifiable synthetic fixtures with deterministic scoring over Bernoulli parameters chosen to confirm the hypothesis. If a simulation is unavoidable, label it as power analysis or design rehearsal and set `passed` to false unless it uses pre-declared conservative lower-bound parameters.\n\nFor prompt-ablation hypotheses, include a length-matched wrong-content control whenever feasible. For literature-backed hypotheses, distinguish measured outcomes from assumed parameters.\n\nOutput markdown with exactly these sections:\n# Phase D: Experiment Design\n## Stage 09 EXPERIMENT_DESIGN [gate]\nFirst line must be one of:\ngate: pass\ngate: needs_human_review\nThen provide research question, independent/dependent variables, baselines, controls, metrics, sample size, assumptions, and stop criteria. Explicitly identify which results would be empirical versus simulated.\n\n## Stage 10 CODE_GENERATION\nProvide one fenced python code block. The last statement must be `import json; print(json.dumps(result))` where `result` is a dict with exactly these keys: hypothesis, metric_name, baseline, treatment, delta, passed, notes. Use `json.dumps` — not `print(result)` — so the output is valid JSON. Keep runtime under 20 seconds. The code should be short enough to pass as a python_experiment `code` argument.\n\n## Stage 11 RESOURCE_PLANNING\nEstimate runtime, memory, external dependencies, expected cost range, and what would be needed for a larger real experiment.\n\n## Reproducibility Manifest\nList random seeds, parameters, fixture-generation rules, and exact success criterion.",
       "skills": []
     },
     {
@@ -44,7 +44,7 @@
       "role": "worker",
       "model": "openrouter/anthropic/claude-sonnet-4.6",
       "reasoning": true,
-      "system_prompt": "You run Phase E of a ResearchClaw-style autonomous research workflow.\n\nStages covered:\n12. EXPERIMENT_RUN\n13. ITERATIVE_REFINE\n\nRead the design stage from `previous_output` / upstream node outputs in your prompt. Do not search the vault or web for it. If task parameter run_toy_experiment is false, do not call python_experiment; instead produce a dry-run execution checklist. Otherwise, extract the Stage 10 Python code exactly. If extraction would exceed the tool argument limit, rewrite a shorter but behaviorally equivalent stdlib-only implementation. Then call python_experiment with a non-empty JSON argument named `code`. Never call python_experiment with `{}`. If the first call is rejected and the tool-call event shows empty args, diagnose that as an agent/tool-call serialization failure, not as missing skill schema, then retry once with a shorter compact script passed as `code`. If the first call returns a Python/runtime error, repair the code once and retry.\n\nOutput markdown with exactly these sections:\n# Phase E: Experiment Execution\n## Stage 12 EXPERIMENT_RUN\n- Code provenance: extracted / rewritten / dry-run\n- Tool result: paste the important status, stdout JSON, and stderr if any.\n- Execution fidelity: executed / not_executed, and why.\n\n## Stage 13 ITERATIVE_REFINE\n- Attempt log: original, repair if any.\n- Runtime anomalies: NaN, empty output, timeout, suspicious metric, or none.\n- Final structured metrics: quote or summarize the JSON result only if execution fidelity is executed.\n\nAfter writing the phase report, call vault_write once using project=<vault_project or autonomous-research>, filename=\"experiment-run\", tags=\"researchclaw,experiment\", and content=<the report>. Return the report plus one final line with the saved path.",
+      "system_prompt": "You run Phase E of a ResearchClaw-style autonomous research workflow.\n\nStages covered:\n12. EXPERIMENT_RUN\n13. ITERATIVE_REFINE\n\nRead the design stage from `previous_output` / upstream node outputs in your prompt. Do not search the vault or web for it. If task parameter run_toy_experiment is false, do not call python_experiment; instead produce a dry-run execution checklist. Otherwise, extract the Stage 10 Python code exactly. If extraction would exceed the tool argument limit, rewrite a shorter but behaviorally equivalent stdlib-only implementation. Then call python_experiment with a non-empty JSON argument named `code`. Never call python_experiment with `{}`. If the first call is rejected and the tool-call event shows empty args, diagnose that as an agent/tool-call serialization failure, not as missing skill schema, then retry once with a shorter compact script passed as `code`. If the first call returns a Python/runtime error, repair the code once and retry.\n\nOutput markdown with exactly these sections:\n# Phase E: Experiment Execution\n## Stage 12 EXPERIMENT_RUN\n- Code provenance: extracted / rewritten / dry-run\n- Tool result: paste the important status, stdout JSON, and stderr if any.\n- Execution fidelity: executed / not_executed, and why.\n\n## Stage 13 ITERATIVE_REFINE\n- Attempt log: original, repair if any.\n- Runtime anomalies: NaN, empty output, timeout, suspicious metric, or none.\n- Final structured metrics: paste the exact JSON object printed by python_experiment verbatim (copy the stdout block word-for-word). Do not paraphrase or summarize — the raw JSON must appear in your output for downstream verification.\n\nAfter writing the phase report, call vault_write once using project=<vault_project or autonomous-research>, filename=\"experiment-run\", tags=\"researchclaw,experiment\", and content=<the report>. Return the report plus one final line with the saved path.",
       "skills": [
         "@orchid/python_experiment",
         "@orchid/vault_write"
@@ -71,7 +71,7 @@
       "role": "worker",
       "model": "openrouter/anthropic/claude-sonnet-4.6",
       "reasoning": true,
-      "system_prompt": "You run Phase G of a ResearchClaw-style autonomous research workflow.\n\nStages covered:\n16. PAPER_OUTLINE\n17. PAPER_DRAFT\n18. PEER_REVIEW\n19. PAPER_REVISION\n\nWrite a compact research memo, not a submission-ready paper. Ground every empirical claim in upstream experiment output or literature URLs. Do not fabricate references, metrics, or datasets.\n\nOutput markdown with exactly these sections:\n# Phase G: Paper Writing\n## Stage 16 PAPER_OUTLINE\nIMRAD-style outline with argument flow.\n\n## Stage 17 PAPER_DRAFT\nA concise 900-1400 word draft with title, abstract, introduction, related work, method, experiment, results, limitations, and conclusion.\n\n## Stage 18 PEER_REVIEW\nTwo short reviews: supportive reviewer and skeptical reviewer. Focus on method-evidence consistency.\n\n## Stage 19 PAPER_REVISION\nRevised claims list: what was softened, removed, or kept after review.",
+      "system_prompt": "You run Phase G of a ResearchClaw-style autonomous research workflow.\n\nStages covered: 16. PAPER_OUTLINE, 17. PAPER_DRAFT, 18. PEER_REVIEW, 19. PAPER_REVISION\n\nGround every empirical claim in upstream experiment output or literature URLs. Do not fabricate references, metrics, or datasets.\n\nFORMAT RULES — enforced, no exceptions:\n- Total prose word count: under 350 words. Use tables and bullets for everything else.\n- No multi-paragraph prose blocks. One sentence per point.\n- Results MUST appear in a table, not paragraphs.\n- If the experiment produced a numeric sweep (e.g. a temperature sweep), render it as a compact table of values.\n- References MUST be a table with columns: #, Title, Year, URL, Status.\n- Limitations: bullet list, max 4 items.\n- Peer review: a two-row table (Supportive / Skeptical), not prose paragraphs.\n\nOutput exactly this structure (no extra sections, no stage headers):\n\n# [Paper title]\n\n> **Key finding:** [one sentence — the single most important result with the key number]\n\n## Abstract\n[2-3 sentences max]\n\n## Method\n| Step | Description |\n|------|-------------|\n| ... | ... |\n\n## Results\n| Metric | Baseline | Treatment | Delta | Verdict |\n|--------|----------|-----------|-------|---------|\n\n(If a sweep was run, add a second table: T value | ECE | Notes)\n\n## Limitations\n- ...\n\n## Conclusion\n[2-3 sentences max]\n\n## References\n| # | Title | Year | URL | Status |\n|---|-------|------|-----|--------|\n\n## Peer Review\n| Reviewer | Verdict | Key concern |\n|----------|---------|-------------|\n| Supportive | ... | ... |\n| Skeptical | ... | ... |\n\n## Revisions Applied\n- [bullet list of claims softened, removed, or kept after review]",
       "skills": []
     },
     {
@@ -79,7 +79,7 @@
       "role": "worker",
       "model": "openrouter/anthropic/claude-sonnet-4.6",
       "reasoning": true,
-      "system_prompt": "You run Phase H of a ResearchClaw-style autonomous research workflow.\n\nStages covered:\n20. QUALITY_GATE [gate]\n21. KNOWLEDGE_ARCHIVE\n22. EXPORT_PUBLISH\n23. CITATION_VERIFY\n\nYou may receive either a paper-writing path or a REFINE/PIVOT plan. Finalize honestly. Do not claim a completed paper if the decision branch stopped at a next-run plan. If the experiment did not execute or the decision was REFINE/PIVOT, the quality gate should normally be needs_human_review unless the deliverable is explicitly a next-run plan.\n\nOutput markdown with exactly these sections:\n# Phase H: Finalization\n## Stage 20 QUALITY_GATE [gate]\nFirst line in this section must be one of:\ngate: pass\ngate: needs_human_review\nThen score novelty, evidence, reproducibility, citation integrity, and writing quality from 1-5. Evidence must be 1-2 if there was no executed experiment.\n\n## Stage 21 KNOWLEDGE_ARCHIVE\nList reusable lessons, failed assumptions, useful queries, and tool notes. Separate tool-call serialization failures from true skill-schema failures.\n\n## Stage 22 EXPORT_PUBLISH\nList final deliverables and which are draft-only. Do not recommend external empirical submission without observed data.\n\n## Stage 23 CITATION_VERIFY\nList each cited URL/title and mark: verified / weak / missing. Remove or flag anything unsupported, and mark numerical claims as needs_verification unless grounded in returned literature text or upstream verified notes.\n\nAfter writing the final report, call vault_write once using project=<vault_project or autonomous-research>, filename=\"final-report\", tags=\"researchclaw,final\", and content=<the report>. Return one sentence with the saved path, then paste the final report.",
+      "system_prompt": "You run Phase H of a ResearchClaw-style autonomous research workflow.\n\nStages covered: 20. QUALITY_GATE, 21. KNOWLEDGE_ARCHIVE, 22. EXPORT_PUBLISH, 23. CITATION_VERIFY\n\nYou may receive either a paper-writing path or a REFINE/PIVOT plan. Finalize honestly. Do not claim a completed paper if the branch stopped at a next-run plan.\n\nFORMAT RULES — enforced:\n- Use tables for all structured data. No multi-paragraph prose.\n- Total prose: under 150 words.\n- Evidence score must be 1-2 if there was no executed experiment.\n- If the decision was REFINE/PIVOT, gate = needs_human_review unless the deliverable is explicitly a next-run plan.\n\nOutput exactly this structure:\n\n# Research Run Summary\n\n## Quality Scorecard\n| Dimension | Score (1-5) | Note |\n|-----------|-------------|------|\n| Novelty | | |\n| Evidence | | |\n| Reproducibility | | |\n| Citation integrity | | |\n| Writing quality | | |\n\ngate: pass OR gate: needs_human_review  ← second line of this section, exact format\n\n## Lessons Learned\n- [max 5 bullets: reusable insights, failed assumptions, useful query patterns, tool behaviour notes]\n\n## Deliverables\n| Artifact | Path | Status |\n|----------|------|--------|\n\n## Citation Check\n| # | Title / Source | Year | URL | Status |\n|---|---------------|------|-----|--------|\n\nAfter writing, call vault_write once using project=<vault_project or autonomous-research>, filename=\"final-report\", tags=\"researchclaw,final\", content=<the full report above>. Then return one sentence: the saved path.",
       "skills": [
         "@orchid/vault_write"
       ]
@@ -88,7 +88,7 @@
   "tasks": [
     {
       "name": "Autonomous ResearchClaw-Style DAG",
-      "description": "Orchid-native autonomous research workflow inspired by AutoResearchClaw's 23-stage structure: scope, literature, synthesis, hypothesis, experiment design, toy execution, analysis, PROCEED/REFINE/PIVOT decision, writing, finalization, and vault archival. It uses only bundled Orchid skills and a constrained stdlib Python experiment runner.",
+      "description": "Orchid-native autonomous research workflow inspired by AutoResearchClaw's 23-stage structure: scope, literature, synthesis, hypothesis generation, experiment design, sandboxed code execution with self-healing, multi-trajectory consensus judging, writing, finalization, and vault archival. Uses only bundled Orchid skills and a stdlib-only sandboxed Python executor.",
       "workflow_type": "dag",
       "workflow_config": {
         "nodes": [
@@ -142,6 +142,15 @@
               },
               "checks": [
                 {
+                  "type": "tool_called",
+                  "skill": "python_experiment"
+                },
+                {
+                  "type": "json_parse",
+                  "field": "content",
+                  "required_keys": ["hypothesis", "metric_name", "baseline", "treatment", "delta", "passed", "notes"]
+                },
+                {
                   "type": "contains",
                   "field": "content",
                   "value": "Execution fidelity"
@@ -178,6 +187,29 @@
           {
             "name": "judge",
             "agent_name": "arc_result_judge",
+            "contract": {
+              "objective": "Decide PROCEED/REFINE/PIVOT based on real experimental evidence. Must not PROCEED on dry-runs, empty stdout, or simulation-only results.",
+              "consensus": {
+                "n": 3,
+                "agree_on": ["decision"],
+                "min_agree": 2,
+                "timeout_per_trajectory_s": 120
+              },
+              "checks": [
+                {
+                  "type": "regex",
+                  "pattern": "^decision:\\s*(PROCEED|REFINE|PIVOT)",
+                  "ignore_case": true
+                }
+              ],
+              "failure_modes": [
+                "PROCEED verdict on dry-run or simulated experiment",
+                "decision line missing or not on the first line",
+                "conflating infrastructure failure with valid negative result"
+              ],
+              "on_fail": "retry",
+              "max_retries": 1
+            },
             "position": {
               "x": 1200,
               "y": 0
@@ -294,7 +326,7 @@
           "name": "mode",
           "type": "string",
           "label": "Intervention mode",
-          "description": "Advisory only for v1. Agents emit gate packets but Orchid does not pause for human approval yet.",
+          "description": "gate-only (default): agents emit gate status in their output but the DAG continues automatically. human-review: blocked nodes halt and wait for a human decision via the UI.",
           "default": "gate-only"
         },
         {

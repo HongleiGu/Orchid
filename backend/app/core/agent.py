@@ -133,6 +133,7 @@ class LLMAgent(BaseAgent):
         steps = 0
         tool_error_counts: dict[str, int] = {}
         disabled_tools: set[str] = set()
+        tool_calls_made: list[str] = []
 
         # ── Reasoning pass (optional) ────────────────────────────────────────
         if self.reasoning and user_message:
@@ -197,6 +198,7 @@ class LLMAgent(BaseAgent):
                         content=f"[Run stopped: {exc.message}]",
                         agent_name=self.name,
                         model_used=self.model,
+                        metadata={"tool_calls_made": tool_calls_made},
                     )
 
             # Filter out disabled tools so the LLM stops trying them
@@ -245,7 +247,8 @@ class LLMAgent(BaseAgent):
                     agent_name=self.name,
                     model_used=response.model,
                     metadata={"input_tokens": response.input_tokens,
-                               "output_tokens": response.output_tokens},
+                               "output_tokens": response.output_tokens,
+                               "tool_calls_made": tool_calls_made},
                 )
 
             # Append assistant turn with tool calls
@@ -254,6 +257,10 @@ class LLMAgent(BaseAgent):
                 content=response.content,
                 tool_calls=response.tool_calls,
             ))
+
+            # Record which tools were actually invoked (ground-truth for contracts)
+            for tc in response.tool_calls:
+                tool_calls_made.append(tc.name)
 
             # Execute all tool calls in this turn
             results = await self._execute_tool_calls(
@@ -281,7 +288,10 @@ class LLMAgent(BaseAgent):
 
         logger.warning("%s hit max_steps=%d — returning last content", self.name, max_steps)
         last_content = history[-2].content if len(history) >= 2 else ""
-        return AgentOutput(content=last_content, agent_name=self.name, model_used=self.model)
+        return AgentOutput(
+            content=last_content, agent_name=self.name, model_used=self.model,
+            metadata={"tool_calls_made": tool_calls_made},
+        )
 
     async def _execute_tool_calls(
         self,

@@ -9,7 +9,13 @@ from typing import Any
 import httpx
 
 MAX_RESULTS = 25
-TIMEOUT = 18
+# arXiv export API can be slow; give it more headroom than OpenAlex.
+_ARXIV_TIMEOUT = 35
+_OPENALEX_TIMEOUT = 20
+_ARXIV_RETRIES = 2           # attempts before giving up (1 retry after the first)
+_ARXIV_RETRY_DELAY = 3.0     # seconds between retry attempts
+# Cap simultaneous arXiv requests to avoid triggering rate-limiting.
+_ARXIV_SEMAPHORE = asyncio.Semaphore(2)
 
 
 async def execute(
@@ -32,25 +38,36 @@ async def execute(
     notes: list[str] = []
     coverage: dict[str, int] = {}
 
-    async with httpx.AsyncClient(
-        timeout=TIMEOUT,
-        headers={"User-Agent": "Orchid literature_search/0.2"},
-    ) as client:
+    arxiv_client = httpx.AsyncClient(
+        timeout=_ARXIV_TIMEOUT,
+        headers={"User-Agent": "Orchid literature_search/0.3"},
+    )
+    openalex_client = httpx.AsyncClient(
+        timeout=_OPENALEX_TIMEOUT,
+        headers={"User-Agent": "Orchid literature_search/0.3"},
+    )
+
+    async with arxiv_client, openalex_client:
         tasks = []
         labels = []
         for q in search_queries:
-            tasks.append(_search_arxiv(client, q, year, limit))
+            tasks.append(_search_arxiv_with_retry(arxiv_client, q, year, limit))
             labels.append(f"arXiv:{q}")
-            tasks.append(_search_openalex(client, q, year, limit))
+            tasks.append(_search_openalex(openalex_client, q, year, limit))
             labels.append(f"OpenAlex:{q}")
         if ids:
-            tasks.append(_fetch_arxiv_ids(client, ids, year))
+            tasks.append(_fetch_arxiv_ids(arxiv_client, ids, year))
             labels.append("arXiv:id_list")
 
         if include_semantic_scholar and os.environ.get("SEMANTIC_SCHOLAR_API_KEY"):
-            for q in search_queries:
-                tasks.append(_search_semantic_scholar(client, q, year, limit))
-                labels.append(f"Semantic Scholar:{q}")
+            ss_client = httpx.AsyncClient(
+                timeout=_OPENALEX_TIMEOUT,
+                headers={"User-Agent": "Orchid literature_search/0.3"},
+            )
+            async with ss_client:
+                for q in search_queries:
+                    tasks.append(_search_semantic_scholar(ss_client, q, year, limit))
+                    labels.append(f"Semantic Scholar:{q}")
         elif include_semantic_scholar:
             notes.append("Skipped Semantic Scholar: SEMANTIC_SCHOLAR_API_KEY is not configured.")
         else:
@@ -72,6 +89,25 @@ async def execute(
     return _format_report(search_queries, ids, year, ranked, notes, coverage)
 
 
+async def _search_arxiv_with_retry(
+    client: httpx.AsyncClient,
+    query: str,
+    year_from: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Fetch arXiv results with up to _ARXIV_RETRIES attempts and a semaphore."""
+    last_exc: Exception = RuntimeError("no attempts made")
+    for attempt in range(_ARXIV_RETRIES):
+        async with _ARXIV_SEMAPHORE:
+            try:
+                return await _search_arxiv(client, query, year_from, limit)
+            except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as exc:
+                last_exc = exc
+                if attempt < _ARXIV_RETRIES - 1:
+                    await asyncio.sleep(_ARXIV_RETRY_DELAY)
+    raise last_exc
+
+
 async def _search_arxiv(
     client: httpx.AsyncClient,
     query: str,
@@ -84,7 +120,7 @@ async def _search_arxiv(
             "search_query": _arxiv_query(query),
             "start": 0,
             "max_results": limit,
-            "sortBy": "submittedDate",
+            "sortBy": "relevance",
             "sortOrder": "descending",
         },
     )
@@ -97,11 +133,12 @@ async def _fetch_arxiv_ids(
     ids: list[str],
     year_from: int,
 ) -> list[dict[str, Any]]:
-    resp = await client.get(
-        "https://export.arxiv.org/api/query",
-        params={"id_list": ",".join(ids), "start": 0, "max_results": len(ids)},
-    )
-    resp.raise_for_status()
+    async with _ARXIV_SEMAPHORE:
+        resp = await client.get(
+            "https://export.arxiv.org/api/query",
+            params={"id_list": ",".join(ids), "start": 0, "max_results": len(ids)},
+        )
+        resp.raise_for_status()
     papers = _parse_arxiv_feed(resp.text, year_from, source="arXiv direct", signal="canonical ID match")
     for paper in papers:
         paper["score"] = int(paper.get("score") or 0) + 2
@@ -133,7 +170,7 @@ def _parse_arxiv_feed(text: str, year_from: int, source: str, signal: str) -> li
             "url": url,
             "abstract": abstract,
             "signal": signal,
-            "score": _score(source, year or 0, 0, title, abstract),
+            "score": _score(source, year or 0, 0),
         })
     return papers
 
@@ -178,7 +215,7 @@ async def _search_openalex(
             "url": landing,
             "abstract": abstract,
             "signal": f"{citations} citations",
-            "score": _score("OpenAlex", int(year or 0), int(citations or 0), title, abstract),
+            "score": _score("OpenAlex", int(year or 0), int(citations or 0)),
         })
     return papers
 
@@ -230,7 +267,7 @@ async def _search_semantic_scholar(
             "url": item.get("url", ""),
             "abstract": abstract,
             "signal": f"{citations} citations",
-            "score": _score("Semantic Scholar", int(year or 0), int(citations or 0), title, abstract),
+            "score": _score("Semantic Scholar", int(year or 0), int(citations or 0)),
         })
     return papers
 
@@ -352,44 +389,52 @@ def _normalise_arxiv_ids(ids: list[str]) -> list[str]:
 
 
 def _arxiv_query(query: str) -> str:
-    terms = [t for t in re.split(r"\s+", query.strip()) if t]
+    """Build a title+abstract arXiv query from a natural-language string.
+
+    Uses ti: and abs: field prefixes so the search is focused on the paper
+    itself rather than metadata/comments. Key phrases (2+ words that look like
+    a compound term) are quoted; single words are matched as-is. Falls back to
+    a single abs: query when the split would produce > 8 terms to keep URLs
+    manageable.
+    """
+    terms = [t for t in re.split(r"\s+", query.strip()) if t and len(t) > 1]
     if not terms:
         return "all:LLM"
-    # Field each term so broad natural-language queries do not become arXiv's
-    # accidental OR searches. Cap terms to keep URLs small.
-    return " AND ".join(f"all:{_escape_arxiv_term(t)}" for t in terms[:10])
+    # Build a compound abs: query — more permissive than AND-chaining all:
+    # but still field-restricted so it doesn't match random metadata.
+    escaped = [_escape_arxiv_term(t) for t in terms[:8] if _escape_arxiv_term(t)]
+    if not escaped:
+        return "all:LLM"
+    # Try title match on first two terms + abstract match on all terms.
+    ti_part = " AND ".join(f"ti:{t}" for t in escaped[:2])
+    abs_part = " AND ".join(f"abs:{t}" for t in escaped)
+    return f"({ti_part}) OR ({abs_part})"
 
 
 def _escape_arxiv_term(term: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]", "", term) or "LLM"
+    return re.sub(r"[^A-Za-z0-9_.-]", "", term) or ""
 
 
-def _score(source: str, year: int, citations: int, title: str, abstract: str) -> int:
-    text = f"{title} {abstract}".lower()
+def _score(source: str, year: int, citations: int) -> int:
+    """Score purely on source quality, recency, and citation count.
+
+    Topic-specific keyword boosting was removed: it caused OpenAlex to
+    surface off-topic papers that happened to mention general AI terms.
+    The search engine's own relevance ranking handles topic matching.
+    """
     score = 0
     if source in {"arXiv direct", "Semantic Scholar"}:
         score += 2
-    if year >= 2022:
+    if year >= 2023:
+        score += 2
+    elif year >= 2022:
         score += 1
-    if citations >= 100:
+    if citations >= 500:
+        score += 5
+    elif citations >= 100:
         score += 3
     elif citations >= 25:
         score += 2
     elif citations > 0:
         score += 1
-    for term in (
-        "agent",
-        "tool",
-        "api",
-        "function call",
-        "reflection",
-        "self-correct",
-        "self refine",
-        "reflexion",
-        "recovery",
-        "failure",
-        "benchmark",
-    ):
-        if term in text:
-            score += 1
     return score

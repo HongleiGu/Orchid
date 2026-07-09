@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     scheduler_max_concurrent_runs: int = 5
     default_max_turns_per_agent: int = 5
     default_max_total_turns: int = 20
+    # Runaway backstop for DAGs with loops: the total number of node executions
+    # a single DAG run may perform across all iterations. Per-loop budgets live
+    # on the loop-closing edge (`max_iterations`); this is the global ceiling.
+    dag_max_total_node_executions: int = 100
 
     @property
     def cors_origins(self) -> list[str]:

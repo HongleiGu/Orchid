@@ -24,6 +24,18 @@ Failed conditions DON'T decrement the target's in-degree, so a target
 whose only paths are all conditional and all fail will simply be skipped.
 A target with mixed conditional/unconditional paths can hang — keep
 conditional ancestors in a single branch.
+
+Loops
+-----
+An edge with `max_iterations` (or `loop: true`) is a loop-closing (back)
+edge: it points to an already-executed ancestor and, when its condition
+holds, re-runs the nodes between its target and source. Example:
+    {"source": "judge", "target": "design",
+     "if": "'refine' in output.content.lower()", "max_iterations": 3}
+Loop edges are excluded from the forward in-degree (so the graph still
+topo-sorts) and are bounded per-edge by `max_iterations`. A global
+`dag_max_total_node_executions` ceiling (config) stops runaway loops
+regardless of per-edge budgets, returning a diagnostic halt output.
 """
 from __future__ import annotations
 
@@ -68,6 +80,23 @@ class DAGEdge:
     # Either a Callable[[AgentOutput], bool] or a string expression evaluated
     # with restricted globals. None = unconditional.
     condition: Callable[[AgentOutput], bool] | str | None = None
+    # Loop-closing (back) edge support. An edge with `max_iterations` set (or
+    # `loop=True`) is treated as a cycle: it is excluded from the forward
+    # topological in-degree and, when its condition holds and the budget is not
+    # exhausted, re-runs its loop body instead of advancing the DAG. When
+    # `loop=True` without an explicit count, `max_iterations` defaults to 1.
+    max_iterations: int | None = None
+    loop: bool = False
+
+    @property
+    def is_loop(self) -> bool:
+        return self.loop or self.max_iterations is not None
+
+    @property
+    def iteration_budget(self) -> int:
+        if self.max_iterations is not None:
+            return max(0, int(self.max_iterations))
+        return 1 if self.loop else 0
 
 
 @dataclass
@@ -90,20 +119,41 @@ class DAGExecutor:
     ) -> AgentOutput:
         """Walk the DAG executing each node, fanning out where the topology
         allows. Returns the last node's output (or the merged final-frontier
-        output if multiple terminals exist)."""
-        successors: dict[str, list[DAGEdge]] = {n: [] for n in dag.nodes}
-        predecessors: dict[str, list[str]] = {n: [] for n in dag.nodes}
-        in_degree: dict[str, int] = {n: 0 for n in dag.nodes}
-        for edge in dag.edges:
-            successors[edge.source].append(edge)
-            predecessors.setdefault(edge.target, []).append(edge.source)
-            in_degree[edge.target] = in_degree.get(edge.target, 0) + 1
+        output if multiple terminals exist).
 
+        Forward edges drive the topological walk. Loop edges (see DAGEdge.is_loop)
+        are excluded from the static in-degree so the graph still topo-sorts;
+        when a loop edge's condition holds and its budget is unspent it re-runs
+        its loop body. A global node-execution ceiling bounds runaway loops."""
+        forward_edges = [e for e in dag.edges if not e.is_loop]
+        loop_edges = [e for e in dag.edges if e.is_loop]
+
+        successors: dict[str, list[DAGEdge]] = {n: [] for n in dag.nodes}
+        loop_out: dict[str, list[DAGEdge]] = {n: [] for n in dag.nodes}
+        predecessors: dict[str, list[str]] = {n: [] for n in dag.nodes}
+        base_in_degree: dict[str, int] = {n: 0 for n in dag.nodes}
+        fwd_adj: dict[str, list[str]] = {n: [] for n in dag.nodes}
+
+        for edge in forward_edges:
+            successors[edge.source].append(edge)
+            fwd_adj.setdefault(edge.source, []).append(edge.target)
+            base_in_degree[edge.target] = base_in_degree.get(edge.target, 0) + 1
+        for edge in loop_edges:
+            loop_out[edge.source].append(edge)
+        # Prompt predecessors include loop-edge sources so a re-run node sees the
+        # feedback (e.g. the judge's decision) that triggered the loop.
+        for edge in dag.edges:
+            predecessors.setdefault(edge.target, []).append(edge.source)
+
+        in_degree = dict(base_in_degree)
         upstream: dict[str, AgentOutput] = {}
         completed: set[str] = set()
+        loop_counts: dict[int, int] = {}
+        total_executions = 0
+        max_total = get_settings().dag_max_total_node_executions
 
-        # Initial frontier: every node with no incoming edges. Falls back to
-        # the configured entry if all nodes have in-degree (cycle / mis-config).
+        # Initial frontier: every node with no forward in-edges. Falls back to
+        # the configured entry if all nodes have in-degree (pure cycle).
         frontier = [n for n in dag.nodes if in_degree.get(n, 0) == 0]
         if not frontier:
             frontier = [dag.entry]
@@ -111,6 +161,13 @@ class DAGExecutor:
         last_output: AgentOutput | None = None
 
         while frontier:
+            if total_executions + len(frontier) > max_total:
+                logger.warning(
+                    "DAG run %s hit node-execution ceiling (%d + %d > %d); halting.",
+                    run_id, total_executions, len(frontier), max_total,
+                )
+                return _ceiling_halt_output(total_executions, len(frontier), max_total)
+
             results = await asyncio.gather(
                 *[
                     self._run_node(
@@ -127,6 +184,7 @@ class DAGExecutor:
                 ],
                 return_exceptions=False,
             )
+            total_executions += len(frontier)
             for name, output in zip(frontier, results):
                 upstream[name] = output
                 completed.add(name)
@@ -145,7 +203,41 @@ class DAGExecutor:
                     in_degree[edge.target] -= 1
                     if in_degree[edge.target] == 0 and edge.target not in completed:
                         next_frontier.append(edge.target)
-            frontier = next_frontier
+
+            # Loop edges: when the condition holds and budget remains, reset the
+            # loop body so it re-runs. Processed after forward edges so a body
+            # reset is authoritative for re-entry.
+            for name in frontier:
+                src_output = upstream[name]
+                if _contract_halts(src_output):
+                    continue
+                for edge in loop_out[name]:
+                    if edge.condition is not None and not _eval_condition(edge.condition, src_output):
+                        continue
+                    count = loop_counts.get(id(edge), 0)
+                    if count >= edge.iteration_budget:
+                        logger.info(
+                            "DAG loop %s→%s exhausted after %d/%d iterations.",
+                            edge.source, edge.target, count, edge.iteration_budget,
+                        )
+                        continue
+                    loop_counts[id(edge)] = count + 1
+                    body = _loop_body(edge.target, edge.source, fwd_adj)
+                    for bn in body:
+                        completed.discard(bn)
+                        # Re-count in-degree from forward edges whose source is
+                        # also inside the body; edges entering from outside the
+                        # loop already fired and must not gate the re-run.
+                        in_degree[bn] = sum(
+                            1 for fe in forward_edges
+                            if fe.target == bn and fe.source in body
+                        )
+                    next_frontier.append(edge.target)
+
+            # De-duplicate while preserving order (a node may be reached by both
+            # a forward edge and a loop reactivation in the same tick).
+            seen: set[str] = set()
+            frontier = [n for n in next_frontier if not (n in seen or seen.add(n))]
 
         if last_output is None:
             raise RuntimeError("DAG produced no output — entry node may be missing.")
@@ -210,23 +302,73 @@ class DAGExecutor:
         contract = node.contract or {}
         contract = _normalize_contract(contract)
         max_retries = _contract_max_retries(contract)
+        consensus_cfg = contract.get("consensus") or {}
+        use_consensus = int(consensus_cfg.get("n") or 1) > 1
         attempt = 0
         feedback = ""
 
         while True:
-            ctx = _build_node_context(
-                node=node,
-                task_id=task_id,
-                run_id=run_id,
-                task_description=task_description,
-                inputs=inputs,
-                upstream=upstream,
-                predecessor_names=predecessor_names,
-                emit=emit,
-                contract_feedback=feedback,
-            )
+            if use_consensus:
+                output = await self._run_consensus(
+                    node=node,
+                    consensus=consensus_cfg,
+                    task_id=task_id,
+                    run_id=run_id,
+                    task_description=task_description,
+                    inputs=inputs,
+                    upstream=upstream,
+                    predecessor_names=predecessor_names,
+                    emit=emit,
+                    parent_span_id=span_id,
+                    contract_feedback=feedback,
+                )
+                tally = (output.metadata or {}).get("consensus_tally") or {}
+                if not tally.get("majority_reached", True):
+                    if attempt >= max_retries:
+                        output.metadata = {
+                            **(output.metadata or {}),
+                            "contract": {
+                                "status": "fail",
+                                "attempt": attempt,
+                                "objective": contract.get("objective", ""),
+                                "passed_checks": [],
+                                "failed_checks": [{
+                                    "index": 0, "type": "consensus", "status": "fail",
+                                    "reason": (
+                                        f"No majority on {tally.get('agree_on')} after "
+                                        f"{tally.get('total_trajectories')} trajectories. "
+                                        f"Vote distribution: {tally.get('tally')}."
+                                    ),
+                                }],
+                                "evidence_level": "unknown",
+                                "human_review": None,
+                                "retries_exhausted": True,
+                                "policy": contract.get("on_exhausted") or contract.get("on_blocked") or "stop",
+                            },
+                            "contract_halt": True,
+                        }
+                        return output
+                    attempt += 1
+                    feedback = (
+                        f"Consensus attempt {attempt} failed: no majority on "
+                        f"{tally.get('agree_on')}. Vote split: {tally.get('tally')}. "
+                        f"Make your {tally.get('agree_on')} value unambiguous in your output."
+                    )
+                    continue
+            else:
+                ctx = _build_node_context(
+                    node=node,
+                    task_id=task_id,
+                    run_id=run_id,
+                    task_description=task_description,
+                    inputs=inputs,
+                    upstream=upstream,
+                    predecessor_names=predecessor_names,
+                    emit=emit,
+                    contract_feedback=feedback,
+                )
+                output = await self._run_agent_in_span(node, ctx, span_id)
 
-            output = await self._run_agent_in_span(node, ctx, span_id)
             if not contract:
                 return output
 
@@ -311,6 +453,83 @@ class DAGExecutor:
                 except (asyncio.CancelledError, Exception):
                     pass
             raise
+
+
+    async def _run_consensus(
+        self,
+        node: DAGNode,
+        consensus: dict,
+        task_id: str,
+        run_id: str,
+        task_description: str,
+        inputs: dict,
+        upstream: dict[str, AgentOutput],
+        predecessor_names: list[str],
+        emit: Callable,
+        parent_span_id: str,
+        contract_feedback: str = "",
+    ) -> AgentOutput:
+        """Run the node agent N times in parallel and return the majority-vote winner.
+
+        Each trajectory gets its own sub-span so it can be cancelled independently
+        via the existing span_registry cancel-by-span mechanism. Trajectories that
+        exceed timeout_per_trajectory_s are replaced with a sentinel AgentOutput
+        (traj_timeout=True) and excluded from the vote count.
+        """
+        n = max(2, int(consensus.get("n") or 3))
+        agree_on = [str(f) for f in (consensus.get("agree_on") or [])]
+        min_agree = int(consensus.get("min_agree") or (n // 2 + 1))
+        timeout = float(consensus.get("timeout_per_trajectory_s") or 180)
+
+        traj_span_ids: list[str] = []
+        for i in range(n):
+            traj_span = span_registry.open(
+                run_id=run_id, kind="consensus_trajectory",
+                agent=node.agent.name, parent_span_id=parent_span_id,
+            )
+            traj_span_ids.append(traj_span)
+            await emit(RunEventData(
+                run_id=run_id, seq=0, type=RunEventType.AGENT_START,
+                agent=node.agent.name,
+                span_id=traj_span, parent_span_id=parent_span_id,
+                payload={"kind": "consensus_trajectory", "trajectory": i, "node": node.name, "n": n},
+            ))
+
+        async def run_one(i: int, traj_span: str) -> AgentOutput:
+            ctx = _build_node_context(
+                node=node, task_id=task_id, run_id=run_id,
+                task_description=task_description, inputs=inputs,
+                upstream=upstream, predecessor_names=predecessor_names,
+                emit=emit, contract_feedback=contract_feedback,
+            )
+            try:
+                return await asyncio.wait_for(
+                    self._run_agent_in_span(node, ctx, traj_span),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                return AgentOutput(
+                    content=f"[trajectory {i} timed out after {timeout}s]",
+                    agent_name=node.agent.name,
+                    model_used=node.agent.model,
+                    metadata={"traj_timeout": True, "trajectory_index": i},
+                )
+            finally:
+                span_registry.close(traj_span)
+
+        outputs: list[AgentOutput] = await asyncio.gather(
+            *[run_one(i, traj_span_ids[i]) for i in range(n)],
+            return_exceptions=False,
+        )
+
+        winner, tally = _majority_vote(list(outputs), agree_on, min_agree)
+        winner.metadata = {
+            **(winner.metadata or {}),
+            "consensus_tally": tally,
+            "consensus_n": n,
+            "trajectory_snippets": [o.content[:300] for o in outputs],
+        }
+        return winner
 
 
 def _eval_condition(condition: Any, output: AgentOutput) -> bool:
@@ -468,7 +687,8 @@ async def _run_contract_check(
         ok = bool(pattern and re.search(pattern, _check_field(output, check.get("field", "content")), flags))
         return _check_result(index, kind, "pass" if ok else "fail", f"Expected output to match regex {pattern!r}.")
     if kind == "json_parse":
-        ok, reason = _json_parse_check(_check_field(output, check.get("field", "content")))
+        required_keys = [str(k) for k in (check.get("required_keys") or [])]
+        ok, reason = _json_parse_check(_check_field(output, check.get("field", "content")), required_keys)
         return _check_result(index, kind, "pass" if ok else "fail", reason)
     if kind == "required_sections":
         sections = [str(s) for s in check.get("sections", [])]
@@ -509,6 +729,19 @@ async def _run_contract_check(
         actual = str((output.metadata or {}).get("evidence_level") or contract.get("evidence_level", "unknown"))
         ok = bool(allowed and actual in allowed)
         return _check_result(index, kind, "pass" if ok else "fail", f"Evidence level {actual!r} not in {sorted(allowed)}.")
+    if kind == "tool_called":
+        skill_name = str(check.get("skill") or check.get("name") or "")
+        made = list((output.metadata or {}).get("tool_calls_made") or [])
+        # Match by exact wire name OR by short name appearing as a suffix
+        # (e.g. "python_experiment" matches "orchid_python_experiment").
+        ok = bool(skill_name and any(
+            w == skill_name or w.endswith("_" + skill_name)
+            for w in made
+        ))
+        return _check_result(
+            index, kind, "pass" if ok else "fail",
+            f"Expected skill {skill_name!r} to be called. Actual tool calls: {made or ['none']}.",
+        )
     if kind == "needs_human":
         reason = str(check.get("reason") or "Human input is required before this node can proceed.")
         return _check_result(index, kind, "blocked_needs_human", reason)
@@ -564,6 +797,7 @@ async def _run_llm_contract_judge(
         "task": task_description,
         "upstream": {k: v.content[:2000] for k, v in upstream.items()},
         "output": output.content[:6000],
+        "tool_calls_made": list((output.metadata or {}).get("tool_calls_made") or []),
         "allowed_status": [
             "pass", "fail", "blocked_needs_human", "blocked_needs_secret",
             "blocked_needs_budget", "blocked_needs_network", "blocked_needs_external_access",
@@ -710,23 +944,127 @@ def _check_field(output: AgentOutput, field: Any) -> str:
     return ""
 
 
-def _json_parse_check(text: str) -> tuple[bool, str]:
+def _json_parse_check(text: str, required_keys: list[str] | None = None) -> tuple[bool, str]:
     candidate = (text or "").strip()
     if not candidate:
         return False, "Expected parseable JSON, got empty output."
+
+    def _try(blob: str) -> dict | None:
+        blob = blob.strip()
+        s = blob.find("{")
+        e = blob.rfind("}")
+        if s >= 0 and e > s:
+            blob = blob[s:e + 1]
+        try:
+            data = json.loads(blob)
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+    # 1. Try fenced code blocks first (most explicit, avoids inline snippets).
+    for block in re.findall(r"```(?:json)?\s*\n?(.*?)\n?```", candidate, re.DOTALL):
+        data = _try(block)
+        if data is not None:
+            if required_keys:
+                missing = [k for k in required_keys if k not in data]
+                if missing:
+                    continue
+            return True, "Output contains parseable JSON."
+
+    # 2. Whole-content fallback: if the content IS a bare JSON blob.
     if candidate.startswith("```"):
         candidate = candidate.strip("`").strip()
         if candidate.startswith("json"):
             candidate = candidate[4:].strip()
-    start = candidate.find("{")
-    end = candidate.rfind("}")
+    data = _try(candidate)
+    if data is not None:
+        if required_keys:
+            missing = [k for k in required_keys if k not in data]
+            if missing:
+                return False, f"JSON is valid but missing required keys: {missing}."
+        return True, "Output contains parseable JSON."
+
+    return False, "Expected parseable JSON object — none found in output."
+
+
+def _extract_agree_field(content: str, field: str) -> str | None:
+    """Extract a vote-able value for `field` from agent output content.
+
+    Tries JSON first (structured experiment results), then a prose pattern
+    of the form 'field: value' (for judge nodes that emit 'decision: PROCEED').
+    Returns a lowercased stripped string, or None if not found.
+    """
+    text = (content or "").strip()
+    start = text.find("{")
+    end = text.rfind("}")
     if start >= 0 and end > start:
-        candidate = candidate[start:end + 1]
-    try:
-        json.loads(candidate)
-    except json.JSONDecodeError as exc:
-        return False, f"Expected parseable JSON: {exc.msg}."
-    return True, "Output contains parseable JSON."
+        try:
+            data = json.loads(text[start:end + 1])
+            if isinstance(data, dict) and field in data:
+                return str(data[field]).strip().lower()
+        except json.JSONDecodeError:
+            pass
+    match = re.search(rf"\b{re.escape(field)}\s*[:\s]\s*(\S+)", text, re.IGNORECASE)
+    if match:
+        return match.group(1).strip().lower().rstrip(".,;")
+    return None
+
+
+def _majority_vote(
+    outputs: list[AgentOutput],
+    agree_on: list[str],
+    min_agree: int,
+) -> tuple[AgentOutput, dict]:
+    """Return (winning_output, tally_dict).
+
+    Builds a vote tuple per trajectory from the agree_on fields, counts
+    plurality, and checks whether it meets min_agree. Timed-out trajectories
+    (metadata traj_timeout=True) are excluded from the vote count.
+    """
+    if not outputs:
+        raise ValueError("consensus received zero trajectory outputs")
+    if not agree_on:
+        return outputs[0], {"majority_reached": True, "note": "no agree_on fields configured"}
+
+    vote_tuples: list[tuple[str, ...] | None] = []
+    for o in outputs:
+        if (o.metadata or {}).get("traj_timeout"):
+            vote_tuples.append(None)
+        else:
+            vote_tuples.append(
+                tuple(_extract_agree_field(o.content, f) or "unknown" for f in agree_on)
+            )
+
+    valid = [(i, v) for i, v in enumerate(vote_tuples) if v is not None]
+    if not valid:
+        return outputs[0], {
+            "majority_reached": False, "error": "all_timed_out",
+            "tally": {}, "agree_on": agree_on,
+            "valid_trajectories": 0, "total_trajectories": len(outputs),
+        }
+
+    counts: dict[str, int] = {}
+    for _, v in valid:
+        key = str(v)
+        counts[key] = counts.get(key, 0) + 1
+
+    winner_key = max(counts, key=lambda k: counts[k])
+    winner_output = outputs[0]
+    for idx, v in valid:
+        if str(v) == winner_key:
+            winner_output = outputs[idx]
+            break
+
+    return winner_output, {
+        "majority_reached": counts[winner_key] >= min_agree,
+        "winner": winner_key,
+        "winner_count": counts[winner_key],
+        "min_agree": min_agree,
+        "tally": counts,
+        "agree_on": agree_on,
+        "valid_trajectories": len(valid),
+        "total_trajectories": len(outputs),
+    }
 
 
 def _output_has_artifact(output: AgentOutput, artifact: str) -> bool:
@@ -748,6 +1086,55 @@ def _resolve_contract_policy(contract: dict, verdict: dict) -> str:
 
 def _contract_halts(output: AgentOutput) -> bool:
     return bool((output.metadata or {}).get("contract_halt"))
+
+
+def _reachable(start: str, adj: dict[str, list[str]]) -> set[str]:
+    """Nodes reachable from `start` following `adj` (inclusive of start)."""
+    seen: set[str] = {start}
+    stack = [start]
+    while stack:
+        node = stack.pop()
+        for nxt in adj.get(node, []):
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append(nxt)
+    return seen
+
+
+def _loop_body(entry: str, back_source: str, fwd_adj: dict[str, list[str]]) -> set[str]:
+    """The set of nodes that re-run when a loop edge (back_source → entry) fires.
+
+    It is the nodes forward-reachable from the loop entry that can also forward-
+    reach the loop source — i.e. the nodes strictly inside the cycle — plus the
+    entry and source themselves. Nodes before the entry or after the source stay
+    completed and are not re-executed.
+    """
+    reverse: dict[str, list[str]] = {n: [] for n in fwd_adj}
+    for src, targets in fwd_adj.items():
+        for tgt in targets:
+            reverse.setdefault(tgt, []).append(src)
+    descendants = _reachable(entry, fwd_adj)
+    ancestors = _reachable(back_source, reverse)
+    return (descendants & ancestors) | {entry, back_source}
+
+
+def _ceiling_halt_output(total: int, pending: int, cap: int) -> AgentOutput:
+    """Diagnostic output returned when a DAG blows past the global node ceiling."""
+    return AgentOutput(
+        content=(
+            f"[DAG halted: node-execution ceiling reached "
+            f"({total} run + {pending} pending > {cap}). A loop likely did not "
+            f"converge. Lower a loop's max_iterations or raise "
+            f"dag_max_total_node_executions.]"
+        ),
+        agent_name="dag",
+        metadata={
+            "dag_halt": "node_execution_ceiling",
+            "contract_halt": True,
+            "total_executions": total,
+            "cap": cap,
+        },
+    )
 
 
 def _infer_evidence_level(

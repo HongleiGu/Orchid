@@ -398,7 +398,9 @@ async def _run_dag(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
           ],
           "edges": [
             {"source": "search", "target": "summarise"},
-            {"source": "search", "target": "skip", "if": "'no results' in output.content.lower()"}
+            {"source": "search", "target": "skip", "if": "'no results' in output.content.lower()"},
+            {"source": "judge", "target": "search", "if": "'retry' in output.content.lower()",
+             "max_iterations": 3}   # loop-closing edge: re-runs the body up to 3x
           ],
           "entry": "search"   # optional; defaults to first node
         }
@@ -426,6 +428,8 @@ async def _run_dag(task: Task, cfg: dict, run_id: str, emit) -> AgentOutput:
             source=e["source"],
             target=e["target"],
             condition=e.get("if") or e.get("condition"),
+            max_iterations=e.get("max_iterations"),
+            loop=bool(e.get("loop", False)),
         )
         for e in edge_cfgs
     ]

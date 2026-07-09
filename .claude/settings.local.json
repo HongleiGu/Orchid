@@ -57,7 +57,16 @@
       "Bash(python -m py_compile backend/app/models/registry.py backend/app/budget/pricing.py)",
       "WebFetch(domain:www.producthunt.com)",
       "Bash(Get-ChildItem -Path 'd:\\\\Desktop\\\\study\\\\projects\\\\Orchid' -Directory)",
-      "Bash(Select-Object -ExpandProperty Name)"
+      "Bash(Select-Object -ExpandProperty Name)",
+      "WebFetch(domain:www.nature.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/dag.py'\\).read\\(\\)\\); print\\('dag.py: OK'\\)\")",
+      "Bash(python -c \"import json; json.load\\(open\\('examples/autonomous-researchclaw-dag.json'\\)\\); print\\('dag.json: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/core/dag.py', encoding='utf-8'\\).read\\(\\)\\); print\\('dag.py: OK'\\)\")",
+      "Bash(python -c \"import json; json.load\\(open\\('examples/autonomous-researchclaw-dag.json', encoding='utf-8'\\)\\); print\\('dag.json: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/skills/bundled/python_experiment/execute.py', encoding='utf-8'\\).read\\(\\)\\); print\\('execute.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/skills/bundled/literature_search/execute.py', encoding='utf-8'\\).read\\(\\)\\); print\\('literature_search/execute.py: OK'\\)\")",
+      "Bash(python -c \"import json; d=json.load\\(open\\('examples/autonomous-researchclaw-dag.json', encoding='utf-8'\\)\\); agents={a['name']:a['system_prompt'] for a in d['agents']}; print\\('arc_paper_writer chars:', len\\(agents['arc_paper_writer']\\)\\); print\\('arc_finalizer chars:', len\\(agents['arc_finalizer']\\)\\); print\\('dag.json: OK'\\)\")"
     ]
   }
 }
