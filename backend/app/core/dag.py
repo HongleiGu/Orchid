@@ -20,10 +20,12 @@ Python expression evaluated with restricted globals — usable forms:
     "ok" in output.content.lower() # keyword match
     output.metadata.get("score", 0) > 0.7
 
-Failed conditions DON'T decrement the target's in-degree, so a target
-whose only paths are all conditional and all fail will simply be skipped.
-A target with mixed conditional/unconditional paths can hang — keep
-conditional ancestors in a single branch.
+Every forward edge resolves when its source completes — either *live*
+(condition passed / unconditional) or *dead* (condition failed) — and both
+decrement the target's in-degree. A join node runs once all its in-edges have
+resolved and at least one fired; if every in-edge is dead the node is pruned
+and its own out-edges resolve dead in turn. So branches may safely merge into
+a single downstream node, and a fully-untaken branch is skipped end to end.
 
 Loops
 -----
@@ -146,8 +148,13 @@ class DAGExecutor:
             predecessors.setdefault(edge.target, []).append(edge.source)
 
         in_degree = dict(base_in_degree)
+        # live_in[n]: how many of n's resolved in-edges actually fired (condition
+        # passed). A node whose in-edges have all resolved but none fired is dead
+        # and gets pruned instead of run.
+        live_in: dict[str, int] = {n: 0 for n in dag.nodes}
         upstream: dict[str, AgentOutput] = {}
         completed: set[str] = set()
+        pruned: set[str] = set()
         loop_counts: dict[int, int] = {}
         total_executions = 0
         max_total = get_settings().dag_max_total_node_executions
@@ -190,23 +197,56 @@ class DAGExecutor:
                 completed.add(name)
                 last_output = output
 
-            # Compute next frontier from edges that fired AND whose conditions
-            # (if any) hold against the source's output.
-            next_frontier: list[str] = []
+            next_ready: list[str] = []
+
+            def _decide(tgt: str) -> None:
+                # Called when one of tgt's forward in-edges has just resolved.
+                # When every in-edge has resolved (in_degree hits 0), the node
+                # runs if any edge fired, else it is pruned (branch not taken).
+                if in_degree[tgt] != 0 or tgt in completed or tgt in pruned:
+                    return
+                if live_in[tgt] > 0:
+                    next_ready.append(tgt)
+                else:
+                    prune_queue.append(tgt)
+
+            # Resolve forward edges. A halted source prunes its successors (the
+            # branch stops); otherwise each edge resolves live (condition passed
+            # or unconditional) or dead (condition failed). Both live and dead
+            # edges decrement in_degree so a downstream join can't hang.
+            prune_queue: list[str] = [n for n in frontier if _contract_halts(upstream[n])]
             for name in frontier:
                 src_output = upstream[name]
                 if _contract_halts(src_output):
                     continue
                 for edge in successors[name]:
-                    if edge.condition is not None and not _eval_condition(edge.condition, src_output):
+                    tgt = edge.target
+                    if tgt in completed:
                         continue
-                    in_degree[edge.target] -= 1
-                    if in_degree[edge.target] == 0 and edge.target not in completed:
-                        next_frontier.append(edge.target)
+                    live = edge.condition is None or _eval_condition(edge.condition, src_output)
+                    in_degree[tgt] -= 1
+                    if live:
+                        live_in[tgt] += 1
+                    _decide(tgt)
+
+            # Propagate pruning: a pruned node's out-edges are all dead, which may
+            # in turn prune downstream joins that have no other live path.
+            while prune_queue:
+                dead = prune_queue.pop()
+                if dead in pruned or dead in completed:
+                    continue
+                pruned.add(dead)
+                for edge in successors[dead]:
+                    tgt = edge.target
+                    if tgt in completed:
+                        continue
+                    in_degree[tgt] -= 1
+                    _decide(tgt)
 
             # Loop edges: when the condition holds and budget remains, reset the
-            # loop body so it re-runs. Processed after forward edges so a body
-            # reset is authoritative for re-entry.
+            # forward-reachable subgraph from the loop target so it (and any
+            # conditional exits downstream of it) re-evaluate. Processed after
+            # forward resolution so the reset is authoritative for re-entry.
             for name in frontier:
                 src_output = upstream[name]
                 if _contract_halts(src_output):
@@ -222,22 +262,24 @@ class DAGExecutor:
                         )
                         continue
                     loop_counts[id(edge)] = count + 1
-                    body = _loop_body(edge.target, edge.source, fwd_adj)
-                    for bn in body:
-                        completed.discard(bn)
+                    reset = _reachable(edge.target, fwd_adj)
+                    for rn in reset:
+                        completed.discard(rn)
+                        pruned.discard(rn)
+                        live_in[rn] = 0
                         # Re-count in-degree from forward edges whose source is
-                        # also inside the body; edges entering from outside the
-                        # loop already fired and must not gate the re-run.
-                        in_degree[bn] = sum(
+                        # also inside the reset set; edges entering from outside
+                        # the loop already fired and must not gate the re-run.
+                        in_degree[rn] = sum(
                             1 for fe in forward_edges
-                            if fe.target == bn and fe.source in body
+                            if fe.target == rn and fe.source in reset
                         )
-                    next_frontier.append(edge.target)
+                    next_ready.append(edge.target)
 
             # De-duplicate while preserving order (a node may be reached by both
             # a forward edge and a loop reactivation in the same tick).
             seen: set[str] = set()
-            frontier = [n for n in next_frontier if not (n in seen or seen.add(n))]
+            frontier = [n for n in next_ready if not (n in seen or seen.add(n))]
 
         if last_output is None:
             raise RuntimeError("DAG produced no output — entry node may be missing.")
@@ -472,9 +514,10 @@ class DAGExecutor:
         """Run the node agent N times in parallel and return the majority-vote winner.
 
         Each trajectory gets its own sub-span so it can be cancelled independently
-        via the existing span_registry cancel-by-span mechanism. Trajectories that
-        exceed timeout_per_trajectory_s are replaced with a sentinel AgentOutput
-        (traj_timeout=True) and excluded from the vote count.
+        via the existing span_registry cancel-by-span mechanism. A trajectory that
+        exceeds timeout_per_trajectory_s (traj_timeout=True) or raises (traj_error=True)
+        is replaced with a sentinel AgentOutput and excluded from the vote count, so
+        one slow or broken trajectory cannot sink the whole node.
         """
         n = max(2, int(consensus.get("n") or 3))
         agree_on = [str(f) for f in (consensus.get("agree_on") or [])]
@@ -514,6 +557,18 @@ class DAGExecutor:
                     model_used=node.agent.model,
                     metadata={"traj_timeout": True, "trajectory_index": i},
                 )
+            except asyncio.CancelledError:
+                raise  # cancel-by-span must propagate, never become a vote
+            except Exception as exc:  # noqa: BLE001 - one bad trajectory must not sink the vote
+                logger.warning(
+                    "consensus trajectory %d for node %s raised: %s", i, node.name, exc,
+                )
+                return AgentOutput(
+                    content=f"[trajectory {i} errored: {exc}]",
+                    agent_name=node.agent.name,
+                    model_used=node.agent.model,
+                    metadata={"traj_error": True, "trajectory_index": i, "error": str(exc)},
+                )
             finally:
                 span_registry.close(traj_span)
 
@@ -529,6 +584,24 @@ class DAGExecutor:
             "consensus_n": n,
             "trajectory_snippets": [o.content[:300] for o in outputs],
         }
+
+        # Surface the vote to the run-event stream so the UI can show the split.
+        await emit(RunEventData(
+            run_id=run_id, seq=0, type=RunEventType.CONTRACT_CHECK,
+            agent=node.agent.name, span_id=parent_span_id,
+            payload={
+                "kind": "consensus",
+                "node": node.name,
+                "n": n,
+                "agree_on": agree_on,
+                "min_agree": min_agree,
+                "majority_reached": bool(tally.get("majority_reached", False)),
+                "winner": tally.get("winner"),
+                "tally": tally.get("tally", {}),
+                "valid_trajectories": tally.get("valid_trajectories"),
+                "total_trajectories": tally.get("total_trajectories", n),
+            },
+        ))
         return winner
 
 
@@ -1010,6 +1083,12 @@ def _extract_agree_field(content: str, field: str) -> str | None:
     return None
 
 
+def _is_failed_trajectory(output: AgentOutput) -> bool:
+    """A trajectory that timed out or raised produced no usable vote."""
+    md = output.metadata or {}
+    return bool(md.get("traj_timeout") or md.get("traj_error"))
+
+
 def _majority_vote(
     outputs: list[AgentOutput],
     agree_on: list[str],
@@ -1018,8 +1097,8 @@ def _majority_vote(
     """Return (winning_output, tally_dict).
 
     Builds a vote tuple per trajectory from the agree_on fields, counts
-    plurality, and checks whether it meets min_agree. Timed-out trajectories
-    (metadata traj_timeout=True) are excluded from the vote count.
+    plurality, and checks whether it meets min_agree. Failed trajectories
+    (timed out / errored) are excluded from the vote count.
     """
     if not outputs:
         raise ValueError("consensus received zero trajectory outputs")
@@ -1028,7 +1107,7 @@ def _majority_vote(
 
     vote_tuples: list[tuple[str, ...] | None] = []
     for o in outputs:
-        if (o.metadata or {}).get("traj_timeout"):
+        if _is_failed_trajectory(o):
             vote_tuples.append(None)
         else:
             vote_tuples.append(
@@ -1038,7 +1117,7 @@ def _majority_vote(
     valid = [(i, v) for i, v in enumerate(vote_tuples) if v is not None]
     if not valid:
         return outputs[0], {
-            "majority_reached": False, "error": "all_timed_out",
+            "majority_reached": False, "error": "all_trajectories_failed",
             "tally": {}, "agree_on": agree_on,
             "valid_trajectories": 0, "total_trajectories": len(outputs),
         }
@@ -1099,23 +1178,6 @@ def _reachable(start: str, adj: dict[str, list[str]]) -> set[str]:
                 seen.add(nxt)
                 stack.append(nxt)
     return seen
-
-
-def _loop_body(entry: str, back_source: str, fwd_adj: dict[str, list[str]]) -> set[str]:
-    """The set of nodes that re-run when a loop edge (back_source → entry) fires.
-
-    It is the nodes forward-reachable from the loop entry that can also forward-
-    reach the loop source — i.e. the nodes strictly inside the cycle — plus the
-    entry and source themselves. Nodes before the entry or after the source stay
-    completed and are not re-executed.
-    """
-    reverse: dict[str, list[str]] = {n: [] for n in fwd_adj}
-    for src, targets in fwd_adj.items():
-        for tgt in targets:
-            reverse.setdefault(tgt, []).append(src)
-    descendants = _reachable(entry, fwd_adj)
-    ancestors = _reachable(back_source, reverse)
-    return (descendants & ancestors) | {entry, back_source}
 
 
 def _ceiling_halt_output(total: int, pending: int, cap: int) -> AgentOutput:
@@ -1222,10 +1284,18 @@ def _format_previous_output(
 
 class _OutputProxy:
     """Restricted view of AgentOutput exposed to edge expressions."""
-    __slots__ = ("content", "agent", "model", "metadata")
+    __slots__ = ("content", "agent", "model", "metadata", "first_line")
 
     def __init__(self, o: AgentOutput) -> None:
         self.content = o.content
         self.agent = o.agent_name
         self.model = o.model_used
         self.metadata = dict(o.metadata or {})
+        # First non-empty line, lowercased. For decision/gate nodes the verdict
+        # lives on line 1 ("decision: PROCEED"); matching the whole body instead
+        # lets verbose analysis prose trigger multiple branches at once, so
+        # branch conditions should prefer `output.first_line`.
+        self.first_line = next(
+            (ln.strip().lower() for ln in (o.content or "").splitlines() if ln.strip()),
+            "",
+        )

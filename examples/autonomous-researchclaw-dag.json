@@ -1,5 +1,5 @@
 {
-  "_comment": "ResearchClaw-style autonomous research workflow for Orchid. It adapts the public 23-stage AutoResearchClaw structure into supported Orchid DAG nodes without depending on OpenClaw or the older pipeline executor. Source inspiration: https://github.com/aiming-lab/AutoResearchClaw (MIT). Prompts are Orchid-native and not copied verbatim.",
+  "_comment": "ResearchClaw-style autonomous research workflow for Orchid. It adapts the public 23-stage AutoResearchClaw structure into supported Orchid DAG nodes without depending on OpenClaw or the older pipeline executor. The judge branches to the paper writer on PROCEED or to the rethink planner on REFINE/PIVOT; rethink revises the approach and loops back to the experiment designer via a cyclic edge (max_iterations=2), so the experiment is genuinely re-run rather than dead-ending. Source inspiration: https://github.com/aiming-lab/AutoResearchClaw (MIT). Prompts are Orchid-native and not copied verbatim.",
   "agents": [
     {
       "name": "arc_scope_mapper",
@@ -63,7 +63,7 @@
       "role": "worker",
       "model": "openrouter/anthropic/claude-sonnet-4.6",
       "reasoning": true,
-      "system_prompt": "The ResearchClaw-style workflow chose REFINE or PIVOT at Stage 15. Do not write a paper draft. Produce a concrete next-run plan.\n\nOutput markdown:\n# REFINE/PIVOT Plan\n## Diagnosis\nWhat failed or remained uncertain.\n\n## Revised Research Direction\nIf REFINE: the same hypothesis with a stronger design. If PIVOT: a replacement hypothesis from the earlier ranked list.\n\n## Next Experiment\nVariables, baseline, metric, required tools/data, and expected runtime.\n\n## Human Assistance Needed\nList credentials, datasets, domain decisions, or compute that would unblock the next run. Say 'none' if not needed.",
+      "system_prompt": "The ResearchClaw-style workflow chose REFINE or PIVOT at Stage 15. You are the revise step INSIDE a bounded retry loop: your revised plan feeds directly back into the experiment designer (design), which re-runs design -> execute -> judge. The loop allows up to 2 extra attempts; after that this plan stands as the final next-steps artifact. Do not write a paper draft.\n\nOutput markdown:\n# REFINE/PIVOT Plan\n## Diagnosis\nWhat failed or remained uncertain in the attempt just judged (use the upstream judge and experiment output).\n\n## Revised Research Direction\nIf REFINE: the same hypothesis with a stronger design. If PIVOT: a replacement hypothesis from the earlier ranked list. Be concrete enough that the designer can act on it without guessing.\n\n## Next Experiment\nVariables, baseline, metric, controls, required tools/data, and expected runtime — a spec the designer can implement directly.\n\n## Human Assistance Needed\nList credentials, datasets, domain decisions, or compute that would unblock the next run. Say 'none' if not needed.",
       "skills": []
     },
     {
@@ -227,24 +227,16 @@
             "name": "rethink",
             "agent_name": "arc_rethink_planner",
             "position": {
-              "x": 1440,
-              "y": 120
+              "x": 720,
+              "y": 200
             }
           },
           {
-            "name": "finalize_proceed",
+            "name": "finalize",
             "agent_name": "arc_finalizer",
             "position": {
               "x": 1680,
               "y": -120
-            }
-          },
-          {
-            "name": "finalize_rethink",
-            "agent_name": "arc_finalizer",
-            "position": {
-              "x": 1680,
-              "y": 120
             }
           }
         ],
@@ -270,22 +262,25 @@
             "target": "judge"
           },
           {
+            "_comment": "Branch on the judge's first line only. The decision is on line 1 (Stage 15 mandates it); matching the whole 11k-char analysis lets prose that discusses the alternatives trigger both branches at once.",
             "source": "judge",
             "target": "write",
-            "if": "'decision: proceed' in output.content.lower()"
+            "if": "'proceed' in output.first_line"
           },
           {
             "source": "judge",
             "target": "rethink",
-            "if": "'decision: refine' in output.content.lower() or 'decision: pivot' in output.content.lower()"
+            "if": "'refine' in output.first_line or 'pivot' in output.first_line"
+          },
+          {
+            "_comment": "Loop-closing edge: after a REFINE/PIVOT the rethink planner revises the approach and the experiment is re-run, bounded to 2 extra attempts (max_iterations). On the 3rd unresolved judgement the loop is exhausted and rethink becomes the terminal next-steps plan.",
+            "source": "rethink",
+            "target": "design",
+            "max_iterations": 2
           },
           {
             "source": "write",
-            "target": "finalize_proceed"
-          },
-          {
-            "source": "rethink",
-            "target": "finalize_rethink"
+            "target": "finalize"
           }
         ],
         "entry": "scope",

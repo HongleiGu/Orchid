@@ -114,6 +114,92 @@ async def test_loop_field_without_count_defaults_to_one_iteration():
     assert _calls(dag, "b") == 2
 
 
+async def test_conditional_branches_merge_into_one_terminal():
+    # judge → write (proceed) OR rethink (refine); both → finalize (single join).
+    nodes = [
+        _node("judge", lambda i, c: "decision: proceed"),
+        _node("write", lambda i, c: "wrote"),
+        _node("rethink", lambda i, c: "rethought"),
+        _node("finalize", lambda i, c: "FINAL"),
+    ]
+    edges = [
+        DAGEdge("judge", "write", condition="'proceed' in output.content.lower()"),
+        DAGEdge("judge", "rethink", condition="'refine' in output.content.lower()"),
+        DAGEdge("write", "finalize"),
+        DAGEdge("rethink", "finalize"),
+    ]
+    dag, out = await _run(nodes, edges, "judge")
+
+    assert out.content == "FINAL"
+    assert _calls(dag, "write") == 1
+    assert _calls(dag, "rethink") == 0   # untaken branch skipped
+    assert _calls(dag, "finalize") == 1  # join runs exactly once, no hang
+
+
+async def test_join_with_mixed_conditional_and_unconditional_inedges():
+    # C has one unconditional in-edge (A) and one conditional-false in-edge (B).
+    # The old engine hung here; C must still run once off the live path.
+    nodes = [
+        _node("a", lambda i, c: "A"),
+        _node("b", lambda i, c: "B"),
+        _node("c", lambda i, c: "C"),
+    ]
+    edges = [
+        DAGEdge("a", "c"),
+        DAGEdge("b", "c", condition="'never' in output.content.lower()"),
+    ]
+    dag, out = await _run(nodes, edges, "a")
+
+    assert out.content == "C"
+    assert _calls(dag, "c") == 1
+
+
+async def test_fully_dead_branch_is_pruned_end_to_end():
+    # a → b only via a false condition; b → c. Both b and c must be skipped.
+    nodes = [
+        _node("a", lambda i, c: "A"),
+        _node("b", lambda i, c: "B"),
+        _node("c", lambda i, c: "C"),
+    ]
+    edges = [
+        DAGEdge("a", "b", condition="'yes' in output.content.lower()"),
+        DAGEdge("b", "c"),
+    ]
+    dag, out = await _run(nodes, edges, "a")
+
+    assert out.content == "A"          # only a ran
+    assert _calls(dag, "b") == 0
+    assert _calls(dag, "c") == 0
+
+
+async def test_loop_with_conditional_exit_into_shared_terminal():
+    # The OR-7 shape in miniature: design→execute→judge; judge loops back to
+    # design on refine and exits to done on proceed; done→finalize (single join).
+    def judge(i, c):
+        return "decision: refine" if i < 3 else "decision: proceed"
+
+    nodes = [
+        _node("design", lambda i, c: "designed"),
+        _node("execute", lambda i, c: "ran"),
+        _node("judge", judge),
+        _node("done", lambda i, c: "done"),
+        _node("finalize", lambda i, c: "FINAL"),
+    ]
+    edges = [
+        DAGEdge("design", "execute"),
+        DAGEdge("execute", "judge"),
+        DAGEdge("judge", "done", condition="'proceed' in output.content.lower()"),
+        DAGEdge("judge", "design", condition="'refine' in output.content.lower()", max_iterations=5),
+        DAGEdge("done", "finalize"),
+    ]
+    dag, out = await _run(nodes, edges, "design")
+
+    assert out.content == "FINAL"
+    assert _calls(dag, "design") == 3    # initial + 2 refine loops
+    assert _calls(dag, "done") == 1      # exit branch runs once, after the loop
+    assert _calls(dag, "finalize") == 1  # shared terminal, not duplicated
+
+
 async def test_global_ceiling_halts_runaway_loop(monkeypatch):
     class _Stub:
         dag_max_total_node_executions = 6
