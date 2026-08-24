@@ -7,6 +7,7 @@ ToolResult, AgentOutput) and never touches provider SDKs directly.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -17,6 +18,41 @@ from litellm import acompletion
 from app.core.types import Message, ToolCall, messages_to_openai
 
 logger = logging.getLogger(__name__)
+
+# Transient provider errors that should not sink a long multi-call run. LiteLLM
+# retries some of these internally, but sporadic malformed/empty responses
+# (e.g. OpenRouter returning non-JSON) still surface here, so we add a short
+# outer retry with backoff on top.
+_TRANSIENT_LLM_ERRORS = tuple(
+    exc for exc in (
+        getattr(litellm, "APIError", None),
+        getattr(litellm, "APIConnectionError", None),
+        getattr(litellm, "Timeout", None),
+        getattr(litellm, "RateLimitError", None),
+        getattr(litellm, "InternalServerError", None),
+        getattr(litellm, "ServiceUnavailableError", None),
+    ) if isinstance(exc, type)
+) or (Exception,)
+
+
+async def _acompletion_with_retry(attempts: int = 3, **kwargs):
+    delay = 2.0
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return await acompletion(**kwargs)
+        except _TRANSIENT_LLM_ERRORS as exc:
+            last_exc = exc
+            if attempt == attempts:
+                break
+            logger.warning(
+                "Transient LLM error (attempt %d/%d), retrying in %.0fs: %s",
+                attempt, attempts, delay, exc,
+            )
+            await asyncio.sleep(delay)
+            delay *= 2
+    assert last_exc is not None
+    raise last_exc
 
 
 def _configure_litellm() -> None:
@@ -74,7 +110,7 @@ class ModelClient:
             kwargs["tools"] = tool_specs
 
         try:
-            resp = await acompletion(**kwargs)
+            resp = await _acompletion_with_retry(**kwargs)
         except Exception as exc:
             logger.error("LiteLLM completion error for model %r: %s", model, exc)
             raise

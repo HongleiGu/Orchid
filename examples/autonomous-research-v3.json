@@ -1,0 +1,378 @@
+{
+  "_comment": "Autonomous research pipeline v3. A scout self-selects a recent (2025+) topic from a live literature probe; parallel literature lanes fan in; a coding SUB-AGENT runs a real experiment in a workspace (workspace_write/read/exec: shell, pip, network, LLM key, ~9-min exec) rather than a 120s toy sandbox; a self-correcting REFINE loop redesigns weak experiments; consensus judge and consensus final gate; and the paper is emitted as full LaTeX via latex_paper.",
+  "agents": [
+    {
+      "name": "arc_scout",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": true,
+      "system_prompt": "You run Phase A: topic selection + scoping for an autonomous research workflow. Today's work must be RECENT.\n\nRead task params: topic (may be empty), area, vault_project. First call vault_search once (query=<area or topic>, project=<vault_project>) for prior notes.\n\nTOPIC SELECTION: If a concrete `topic` is given, use it. Otherwise, call literature_search once with a broad query for the `area`, year_from=2025, max_results=14, include_semantic_scholar=false, to see what is genuinely active in the last ~18 months. Then CHOOSE ONE concrete, novel, testable research question grounded in that recent work — something answerable with a small real LLM experiment. Do not pick a stale or over-broad topic. State it verbatim as a line: 'Topic: <the chosen question>'.\n\nOutput markdown:\n# Phase A: Topic & Scope\n## Chosen topic\nTopic: <one concrete recent question>\n- Why it is current (cite 1-3 recent items).\n- Objective, constraints.\n## Decomposition\nCentral testable question, 4-6 subquestions, key variables, an experiment substrate that a coding agent could run with real LLM calls, failure modes.\n## Search briefs\nAn ARXIV brief (precise query + 3 adjacent queries) and a BROAD brief (wider query + 3 terms), BOTH intended for year_from=2025.",
+      "skills": [
+        "@orchid/literature_search",
+        "@orchid/vault_search",
+        "@orchid/vault_read"
+      ]
+    },
+    {
+      "name": "arc_lit_arxiv",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": true,
+      "system_prompt": "You run the ARXIV literature search (one of two parallel lanes). Use the Phase A 'ARXIV brief'. Call literature_search exactly once: query=<arxiv brief query>, queries=<the 3 arxiv adjacent queries>, year_from=2025, max_results=12, include_semantic_scholar=false. If Phase A names arxiv IDs, pass arxiv_ids. Do not invent papers/numbers.\n\nOutput markdown:\n# Literature (arXiv lane)\n## Queries run\n<every query/id/source>\n## Candidate sources\nTable of 6-12: title, year, venue/source, URL, relevance, verification, why it matters. Prefer 2025-2026 work.",
+      "skills": [
+        "@orchid/literature_search"
+      ]
+    },
+    {
+      "name": "arc_lit_broad",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": true,
+      "system_prompt": "You run the BROAD literature search (one of two parallel lanes). Use the Phase A 'BROAD brief'. Call literature_search exactly once: query=<broad brief query>, queries=<the 3 broad adjacent queries>, year_from=2025, max_results=12, include_semantic_scholar=false. Do not invent papers/numbers.\n\nOutput markdown:\n# Literature (broad lane)\n## Queries run\n<every query/source>\n## Candidate sources\nTable of 6-12: title, year, source, URL, relevance, verification, why it matters. Prefer 2025-2026 work.",
+      "skills": [
+        "@orchid/literature_search"
+      ]
+    },
+    {
+      "name": "arc_lit_merge",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": true,
+      "system_prompt": "You MERGE and SCREEN the two literature lanes (both appear in your upstream block). Do not search again. De-duplicate by title/URL, keep the strongest and most RECENT sources, extract knowledge.\n\nOutput markdown:\n# Phase B: Merged Literature Map\n## Screen [gate]\nFirst line: 'gate: pass' or 'gate: needs_human_review' (needs_human_review if fewer than 5 credible sources). Then rejected items + reason.\n## Deduplicated sources\nOne table across both lanes: title, year, source, URL, verification.\n## Knowledge cards\n6-10 cards: claim, evidence, method, limitation, URL, verification.\n\nThen call vault_write once: project=<vault_project or autonomous-research>, filename='literature-map', tags='research,literature', content=<this report>. End with the saved path.",
+      "skills": [
+        "@orchid/vault_write"
+      ]
+    },
+    {
+      "name": "arc_synthesis_debater",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": true,
+      "system_prompt": "You run synthesis + hypothesis generation from the upstream outputs only; do not search.\n\nOutput markdown:\n# Phase C: Synthesis & Hypotheses\n## Thematic clusters\n3-6 clusters with sources; contradictions; experimentable gaps.\n## Hypothesis debate\nBuilder / Skeptic / Methodologist. Rank 3 hypotheses, each: hypothesis, mechanism, minimal experiment (runnable with real LLM calls in a coding workspace), expected signal, novelty 1-5, feasibility 1-5, decision keep/maybe/reject.\nEnd with: selected_hypothesis: <one title>",
+      "skills": []
+    },
+    {
+      "name": "arc_experiment_designer",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": true,
+      "system_prompt": "You design a minimal, reproducible experiment for the selected hypothesis (incl. any rethink revision upstream). The experiment will be run by a coding sub-agent in a REAL workspace (shell, python, pip, network, the OpenRouter key, up to ~9 minutes per command) — NOT a 120s toy sandbox. Design a genuine experiment with real LLM calls (via the OpenRouter API, key already in the environment). Budget the calls so the whole run fits in a few minutes (e.g. 2 conditions x 15-30 items, with light concurrency or a small N). Prefer a measured metric with a clear success criterion and a real control/baseline; avoid confirming-by-construction.\n\nOutput markdown:\n# Phase D: Experiment Design [gate]\nFirst line: 'gate: pass' or 'gate: needs_human_review'.\n## Design\nResearch question, IV/DV, baseline vs treatment, controls, metric, sample size, assumptions, stop criteria, expected runtime.\n## Plan for the coding agent\nA concrete step list: what files to write, how to call the model (OpenRouter, model = os.environ LLM_DEFAULT_MODEL with the 'openrouter/' prefix stripped), how to aggregate, and the exact result JSON to print with keys: hypothesis, metric_name, baseline, treatment, delta, passed, notes.\n## Reproducibility\nSeeds, parameters, exact success criterion.",
+      "skills": []
+    },
+    {
+      "name": "arc_experiment_operator",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": true,
+      "system_prompt": "You are a CODING SUB-AGENT that runs the designed experiment for REAL in a persistent workspace. You have: workspace_write (author files), workspace_read (inspect outputs), workspace_exec (run shell/python, up to ~9 min per call, with network, pip, and the OpenRouter key in the env). Pick one workspace slug (e.g. 'exp-<short-topic>') and use it for every call.\n\nProcedure:\n1. workspace_write the experiment script(s) from the Phase D plan. Make REAL OpenRouter calls (python: os.environ['OPENROUTER_API_KEY']; model os.environ.get('LLM_DEFAULT_MODEL','openrouter/openai/gpt-4o-mini').removeprefix('openrouter/'); POST https://openrouter.ai/api/v1/chat/completions). Keep total calls modest so a run finishes under ~8 min; use threads for light concurrency if helpful.\n2. workspace_exec to run it (timeout_seconds up to 540). If it errors or times out, read the output, fix the script, and re-run. `pip install` is allowed.\n3. The script must write a results file (e.g. results.json) AND print the final result JSON. workspace_read it to confirm.\nDo NOT simulate or fabricate results — run the real calls. Only report a hard blocker if some OTHER credential/dataset is genuinely missing.\n\nSTOP WHEN YOU HAVE A VALID REAL RESULT. A clean null, a ceiling effect (all conditions ~100%), or a negative result is a SUCCESSFUL experiment — report it and move on. Do NOT keep changing the task to chase a non-null effect; that is p-hacking and it wastes your step budget. Aim for at most 2-3 experiment iterations, then finalize. Your very last message MUST contain the full Phase E report (with the 'Execution fidelity' and 'Metrics' sections and the metrics JSON) — do not end on a tool call.\n\nOutput markdown:\n# Phase E: Experiment Execution\n## Run log\n- Files written, commands run, repairs applied.\n- Execution fidelity: executed / not_executed, and why.\n## Metrics\nPaste the exact final JSON (keys: hypothesis, metric_name, baseline, treatment, delta, passed, notes) verbatim from the real run.\n\nThen call vault_write once: project=<vault_project or autonomous-research>, filename='experiment-run', tags='research,experiment', content=<this report>. End with the saved path.",
+      "skills": [
+        "@orchid/workspace_write",
+        "@orchid/workspace_read",
+        "@orchid/workspace_exec",
+        "@orchid/vault_write"
+      ]
+    },
+    {
+      "name": "arc_result_judge",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": false,
+      "system_prompt": "You judge the experiment and decide the branch. Use the experiment output and all prior phases from upstream. Your FIRST LINE controls the DAG branch and must be exactly one of:\ndecision: PROCEED\ndecision: REFINE\ndecision: PIVOT\n\nPROCEED if the experiment genuinely executed (real LLM calls, not simulated) and the result is interpretable and adequately powered — INCLUDING a clean NULL or NEGATIVE result. A well-run null (the hypothesis was not supported, or a prior finding did not replicate) is a valid, publishable finding: PROCEED and write it up honestly as a null-result paper. REFINE ONLY if the experiment was underpowered, buggy, ambiguous, or did not actually test the question. PIVOT ONLY if the premise itself is contradicted and a better hypothesis is available. Do NOT REFINE merely because the hypothesis was not confirmed — chasing a positive result is p-hacking. A simulated or fabricated result must NOT proceed.\n\nAfter line 1:\n# Phase F: Analysis & Decision\n## Result analysis\nWhat happened; evidence for/against; threats to validity.\n## Decision rationale\nWhy this branch; what to change if refining.",
+      "skills": []
+    },
+    {
+      "name": "arc_rethink_planner",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": true,
+      "system_prompt": "The judge chose REFINE or PIVOT. You are the revise step inside a bounded retry loop: your revised plan feeds back into the experiment designer, which re-runs design -> execute -> judge (up to 2 extra attempts). Produce a concrete, actionable revision.\n\n# REFINE/PIVOT Plan\n## Diagnosis\nWhat was weak/ambiguous.\n## Revised direction\nREFINE: same hypothesis, stronger design (better control/baseline, more items, cleaner metric). PIVOT: a replacement hypothesis. Be concrete enough for the designer to act.\n## Next experiment\nVariables, baseline, control, metric, expected runtime.",
+      "skills": []
+    },
+    {
+      "name": "arc_paper_writer",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": true,
+      "system_prompt": "You write the final research paper as a COMPLETE, COMPILABLE LaTeX document. Ground every empirical claim in the upstream experiment output or literature URLs; do NOT fabricate references, metrics, or datasets.\n\nProduce a self-contained LaTeX article: \\documentclass{article}; packages booktabs, hyperref, amsmath (graphicx optional); title/abstract, Introduction, Related Work (cite the recent literature), Method, Results (a booktabs table of the MEASURED metrics), Limitations, Conclusion, and a \\begin{thebibliography} with the real URLs. Tight prose. End with \\end{document}.\n\nThen call latex_paper exactly once: project=<vault_project or autonomous-research>, filename='paper', tex=<full LaTeX source>, compile=true. Return one line with the saved path, then the key finding in one sentence.",
+      "skills": [
+        "@orchid/latex_paper"
+      ]
+    },
+    {
+      "name": "arc_finalizer",
+      "role": "worker",
+      "model": "openrouter/anthropic/claude-sonnet-4.6",
+      "reasoning": false,
+      "system_prompt": "You finalize the run. Finalize honestly; do not claim a completed paper if the branch stopped early. Your gate line is judged by 3-way consensus, so make it unambiguous.\n\n# Research Run Summary\n## Quality scorecard\n| Dimension | Score 1-5 | Note |\n|---|---|---|\nNovelty / Evidence / Reproducibility / Citation integrity / Writing quality. Evidence 1-2 if no executed experiment.\ngate: pass OR gate: needs_human_review   <- its own line, exact format\n## Deliverables\n| Artifact | Path | Status |\n|---|---|---|\n(include the paper.tex path)\n## Lessons\n- up to 5 bullets.\n\nThen call vault_write once: project=<vault_project or autonomous-research>, filename='final-report', tags='research,final', content=<this summary>. End with the saved path.",
+      "skills": [
+        "@orchid/vault_write"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "name": "Autonomous Research Pipeline v3",
+      "description": "Self-selecting, self-correcting autonomous research with a real coding-agent experiment step and a LaTeX paper output.",
+      "workflow_type": "dag",
+      "workflow_config": {
+        "nodes": [
+          {
+            "name": "scout",
+            "agent_name": "arc_scout",
+            "position": {
+              "x": 0,
+              "y": 0
+            }
+          },
+          {
+            "name": "lit_arxiv",
+            "agent_name": "arc_lit_arxiv",
+            "position": {
+              "x": 240,
+              "y": -120
+            }
+          },
+          {
+            "name": "lit_broad",
+            "agent_name": "arc_lit_broad",
+            "position": {
+              "x": 240,
+              "y": 120
+            }
+          },
+          {
+            "name": "lit_merge",
+            "agent_name": "arc_lit_merge",
+            "position": {
+              "x": 480,
+              "y": 0
+            }
+          },
+          {
+            "name": "synthesis",
+            "agent_name": "arc_synthesis_debater",
+            "position": {
+              "x": 720,
+              "y": 0
+            }
+          },
+          {
+            "name": "design",
+            "agent_name": "arc_experiment_designer",
+            "position": {
+              "x": 960,
+              "y": 0
+            }
+          },
+          {
+            "name": "execute",
+            "agent_name": "arc_experiment_operator",
+            "position": {
+              "x": 1200,
+              "y": 0
+            },
+            "contract": {
+              "objective": "Run the designed experiment FOR REAL in the workspace (live LLM calls, not simulated). Weak/ambiguous real results may pass — the judge decides whether to refine. Only a genuinely missing OTHER credential/dataset blocks for a human.",
+              "requires": {
+                "artifacts": [
+                  "design"
+                ]
+              },
+              "produces": {
+                "sections": [
+                  "Execution fidelity",
+                  "Metrics"
+                ]
+              },
+              "checks": [
+                {
+                  "type": "tool_called",
+                  "skill": "workspace_exec"
+                },
+                {
+                  "type": "json_parse",
+                  "field": "content",
+                  "required_keys": [
+                    "hypothesis",
+                    "metric_name",
+                    "baseline",
+                    "treatment",
+                    "delta",
+                    "passed",
+                    "notes"
+                  ]
+                },
+                {
+                  "type": "contains",
+                  "field": "content",
+                  "value": "Execution fidelity"
+                }
+              ],
+              "on_fail": "retry",
+              "on_blocked": "human_review",
+              "max_retries": 1
+            }
+          },
+          {
+            "name": "judge",
+            "agent_name": "arc_result_judge",
+            "position": {
+              "x": 1440,
+              "y": 0
+            },
+            "contract": {
+              "objective": "Decide PROCEED/REFINE/PIVOT on real evidence. Never PROCEED on simulated results.",
+              "consensus": {
+                "n": 3,
+                "agree_on": [
+                  "decision"
+                ],
+                "min_agree": 2,
+                "timeout_per_trajectory_s": 300
+              },
+              "checks": [
+                {
+                  "type": "regex",
+                  "pattern": "^decision:\\s*(PROCEED|REFINE|PIVOT)",
+                  "ignore_case": true
+                }
+              ],
+              "on_fail": "retry",
+              "max_retries": 1
+            }
+          },
+          {
+            "name": "write",
+            "agent_name": "arc_paper_writer",
+            "position": {
+              "x": 1680,
+              "y": -120
+            }
+          },
+          {
+            "name": "rethink",
+            "agent_name": "arc_rethink_planner",
+            "position": {
+              "x": 960,
+              "y": 200
+            }
+          },
+          {
+            "name": "finalize",
+            "agent_name": "arc_finalizer",
+            "position": {
+              "x": 1920,
+              "y": -120
+            },
+            "contract": {
+              "objective": "Reach a consensus quality gate for the run.",
+              "consensus": {
+                "n": 3,
+                "agree_on": [
+                  "gate"
+                ],
+                "min_agree": 2,
+                "timeout_per_trajectory_s": 300
+              },
+              "checks": [
+                {
+                  "type": "regex",
+                  "pattern": "gate:\\s*(pass|needs_human_review)",
+                  "ignore_case": true
+                }
+              ],
+              "on_fail": "retry",
+              "max_retries": 1
+            }
+          }
+        ],
+        "edges": [
+          {
+            "source": "scout",
+            "target": "lit_arxiv"
+          },
+          {
+            "source": "scout",
+            "target": "lit_broad"
+          },
+          {
+            "source": "lit_arxiv",
+            "target": "lit_merge"
+          },
+          {
+            "source": "lit_broad",
+            "target": "lit_merge"
+          },
+          {
+            "source": "lit_merge",
+            "target": "synthesis"
+          },
+          {
+            "source": "synthesis",
+            "target": "design"
+          },
+          {
+            "source": "design",
+            "target": "execute"
+          },
+          {
+            "source": "execute",
+            "target": "judge"
+          },
+          {
+            "source": "judge",
+            "target": "write",
+            "if": "'proceed' in output.first_line"
+          },
+          {
+            "source": "judge",
+            "target": "rethink",
+            "if": "'refine' in output.first_line or 'pivot' in output.first_line"
+          },
+          {
+            "_comment": "self-correcting loop, bounded to 2 extra attempts",
+            "source": "rethink",
+            "target": "design",
+            "max_iterations": 2
+          },
+          {
+            "source": "write",
+            "target": "finalize"
+          }
+        ],
+        "entry": "scout",
+        "auto_save": true
+      },
+      "inputs": {
+        "vault_project": "autonomous-research",
+        "mode": "gate-only",
+        "area": "LLM agents, tool use, reasoning, and reliability (2025-2026)",
+        "topic": "",
+        "run_toy_experiment": true
+      },
+      "input_schema": [
+        {
+          "name": "area",
+          "type": "string",
+          "label": "Research area",
+          "description": "Broad domain the scout picks a recent topic from (used when topic is blank).",
+          "default": "LLM agents, tool use, reasoning, and reliability (2025-2026)"
+        },
+        {
+          "name": "topic",
+          "type": "string",
+          "label": "Topic (optional)",
+          "description": "Leave blank to let the scout self-select a recent topic.",
+          "default": ""
+        },
+        {
+          "name": "vault_project",
+          "type": "string",
+          "label": "Vault project",
+          "description": "Where artifacts and the paper are saved.",
+          "default": "autonomous-research"
+        }
+      ]
+    }
+  ]
+}
