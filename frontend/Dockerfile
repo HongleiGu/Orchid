@@ -1,5 +1,13 @@
+# Package mirrors. Defaults are upstream, so builds outside mainland China are
+# unchanged; docker-compose passes CN mirrors in from .env.
+# COREPACK_NPM_REGISTRY is separate from npm_config_registry — corepack ignores
+# the latter when fetching pnpm itself.
+
 # ── Install deps ───────────────────────────────────────────────────────────────
 FROM node:20-alpine AS deps
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ENV npm_config_registry=$NPM_REGISTRY \
+    COREPACK_NPM_REGISTRY=$NPM_REGISTRY
 RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
@@ -7,6 +15,9 @@ RUN pnpm install --frozen-lockfile
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ENV npm_config_registry=$NPM_REGISTRY \
+    COREPACK_NPM_REGISTRY=$NPM_REGISTRY
 RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules

@@ -22,6 +22,12 @@ or `orchid 0.1.x`.
 - Added the first Skill Writer surface and `/api/v1/skill-writer/*` endpoints
   for drafting external `SKILL.md + execute.py` packages with env-var
   requirements and detailed setup/test documentation.
+- Added opt-in package-mirror configuration for mainland-China deploys:
+  `PIP_INDEX_URL`, `NPM_REGISTRY`, `APT_MIRROR`, and `NODE_MIRROR` in `.env`
+  feed both Docker build args and the container environment, so build-time
+  installs and the runtime installers (marketplace `npm install`,
+  skill-runner `/install-deps` pip) use the same registries. Defaults are the
+  upstream registries, leaving builds outside China unchanged.
 
 ## 2026-05-08
 
