@@ -34,6 +34,13 @@ or `orchid 0.1.x`.
   timeout budget so retries do not extend the worst case. http:// indexes get
   `--trusted-host` automatically, for Aliyun's intranet endpoint.
 
+### Fixed
+- Pinned the frontend's pnpm via `packageManager` in `frontend/package.json`
+  and switched the Dockerfile to `corepack install`, which reads that field.
+  The Dockerfile previously used `corepack prepare pnpm@latest`, which floats:
+  pnpm 11 raised its floor to Node >= 22.13 and pulls in `node:sqlite`, so the
+  Node 20 base started failing `pnpm install` with ERR_UNKNOWN_BUILTIN_MODULE.
+
 ## 2026-05-08
 
 ### Added
