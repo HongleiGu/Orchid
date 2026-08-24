@@ -59,8 +59,10 @@ import logging
 import os
 import subprocess
 import sys
+import time
 import traceback
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 # Ensure /app (where skill_lib lives) is importable from dynamically loaded
 # skill modules. spec_from_file_location does not inherit cwd by default.
@@ -174,6 +176,36 @@ def _http_error(status: int, code: ErrorCode, message: str, **details) -> HTTPEx
     )
 
 
+DEP_INSTALL_TIMEOUT_SECONDS = 120
+
+
+def _pip_indexes() -> list[str]:
+    """Ordered pip indexes to try, highest priority first.
+
+    PIP_INDEX_URLS holds the whole space-separated chain (Aliyun → Tsinghua →
+    upstream by default); PIP_INDEX_URL is the single-value fallback. An empty
+    list means "let pip use its own default index".
+    """
+    urls = os.getenv("PIP_INDEX_URLS", "").split()
+    if urls:
+        return urls
+    single = os.getenv("PIP_INDEX_URL", "").strip()
+    return [single] if single else []
+
+
+def _pip_install_cmd(req_path: str, index_url: str | None) -> list[str]:
+    cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-r", req_path]
+    if index_url:
+        cmd += ["-i", index_url]
+        # Only http:// indexes (e.g. Aliyun's intranet endpoint) need this, and
+        # they have no TLS to verify anyway.
+        if index_url.startswith("http://"):
+            host = urlparse(index_url).hostname
+            if host:
+                cmd += ["--trusted-host", host]
+    return cmd
+
+
 def _log_op(ctx: RequestContext, op: str, **fields) -> None:
     """Structured per-request audit line. Same fields will feed OTel later."""
     extras = " ".join(f"{k}={v!r}" for k, v in fields.items())
@@ -273,34 +305,45 @@ async def install_deps(
             requirements_path=req.requirements_path,
         )
 
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-r", str(req_path)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode != 0:
-            return InstallDepsResponse(
-                status="error",
-                output=result.stderr,
-                error=ErrorEnvelope(
-                    code=ErrorCode.DEP_INSTALL_FAILED,
-                    message="pip install failed",
-                    details={"returncode": result.returncode},
-                ),
+    # Walk the mirror chain in priority order; the whole walk shares one
+    # timeout budget so the endpoint's worst case is unchanged by retries.
+    indexes: list[str | None] = list(_pip_indexes()) or [None]
+    deadline = time.monotonic() + DEP_INSTALL_TIMEOUT_SECONDS
+    attempts: list[str] = []
+
+    for index_url in indexes:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        label = index_url or "pip default index"
+        try:
+            result = subprocess.run(
+                _pip_install_cmd(str(req_path), index_url),
+                capture_output=True,
+                text=True,
+                timeout=remaining,
             )
-        return InstallDepsResponse(status="ok", output=result.stdout)
-    except subprocess.TimeoutExpired:
-        return InstallDepsResponse(
-            status="error",
-            output="pip install timed out",
-            error=ErrorEnvelope(
-                code=ErrorCode.DEP_INSTALL_TIMEOUT,
-                message="pip install timed out",
-                details={"timeout_seconds": 120},
-            ),
-        )
+        except subprocess.TimeoutExpired:
+            attempts.append(f"[{label}] timed out")
+            break
+        if result.returncode == 0:
+            return InstallDepsResponse(status="ok", output=result.stdout)
+        attempts.append(f"[{label}] {result.stderr.strip()}")
+        logger.warning("pip install failed via %s, falling back", label)
+
+    timed_out = time.monotonic() >= deadline
+    return InstallDepsResponse(
+        status="error",
+        output="\n\n".join(attempts) or "pip install produced no output",
+        error=ErrorEnvelope(
+            code=ErrorCode.DEP_INSTALL_TIMEOUT if timed_out else ErrorCode.DEP_INSTALL_FAILED,
+            message="pip install timed out" if timed_out else "pip install failed",
+            details={
+                "indexes_tried": [i or "pip default index" for i in indexes[: len(attempts)]],
+                "timeout_seconds": DEP_INSTALL_TIMEOUT_SECONDS,
+            },
+        ),
+    )
 
 
 @app.post("/reload")

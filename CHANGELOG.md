@@ -22,12 +22,17 @@ or `orchid 0.1.x`.
 - Added the first Skill Writer surface and `/api/v1/skill-writer/*` endpoints
   for drafting external `SKILL.md + execute.py` packages with env-var
   requirements and detailed setup/test documentation.
-- Added opt-in package-mirror configuration for mainland-China deploys:
-  `PIP_INDEX_URL`, `NPM_REGISTRY`, `APT_MIRROR`, and `NODE_MIRROR` in `.env`
-  feed both Docker build args and the container environment, so build-time
-  installs and the runtime installers (marketplace `npm install`,
-  skill-runner `/install-deps` pip) use the same registries. Defaults are the
-  upstream registries, leaving builds outside China unchanged.
+- Added ordered package-mirror chains for mainland-China deploys, defaulting
+  to Aliyun -> Tsinghua -> upstream. `PIP_INDEX_URLS`, `APT_MIRRORS`,
+  `NODE_MIRRORS`, and `NPM_REGISTRIES` are space-separated priority lists: each
+  entry is tried in turn and the first that works wins, so a mirror outage
+  degrades to the next instead of failing the build.
+- Applied those chains to every install surface, including the two that run at
+  runtime rather than build time: the marketplace's `npm install`
+  (`marketplace/service.py`) and the skill-runner's `/install-deps` pip
+  (`skill-runner/main.py`) now walk their chain in order, sharing a single
+  timeout budget so retries do not extend the worst case. http:// indexes get
+  `--trusted-host` automatically, for Aliyun's intranet endpoint.
 
 ## 2026-05-08
 

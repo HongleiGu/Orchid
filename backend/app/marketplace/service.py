@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +29,22 @@ PACKAGES_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "package
 NODE_MODULES = PACKAGES_DIR / "node_modules"
 
 SKILL_RUNNER_URL = "http://skill-runner:9000"
+
+NPM_INSTALL_TIMEOUT_SECONDS = 120
+
+
+def _npm_registries() -> list[str]:
+    """Ordered npm registries to try, highest priority first.
+
+    NPM_REGISTRIES holds the whole space-separated chain (npmmirror → npmjs by
+    default); npm_config_registry is the single-value fallback. An empty list
+    means "let npm use whatever it is already configured with".
+    """
+    regs = os.getenv("NPM_REGISTRIES", "").split()
+    if regs:
+        return regs
+    single = os.getenv("npm_config_registry", "").strip()
+    return [single] if single else []
 
 
 @dataclass
@@ -76,29 +94,47 @@ class MarketplaceService:
                 error=f"Package {registry_name!r} is already installed",
             )
 
-        # npm install
-        try:
-            result = subprocess.run(
-                ["npm", "install", "--save", "--install-links", install_target],
-                cwd=str(PACKAGES_DIR),
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            if result.returncode != 0:
+        # npm install — walk the registry chain in priority order. The whole
+        # walk shares one timeout budget, so retries do not extend the worst case.
+        registries: list[str | None] = list(_npm_registries()) or [None]
+        deadline = time.monotonic() + NPM_INSTALL_TIMEOUT_SECONDS
+        attempts: list[str] = []
+        installed = False
+
+        for registry in registries:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            cmd = ["npm", "install", "--save", "--install-links", install_target]
+            if registry:
+                cmd += ["--registry", registry]
+            label = registry or "npm default registry"
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=str(PACKAGES_DIR),
+                    capture_output=True,
+                    text=True,
+                    timeout=remaining,
+                )
+            except FileNotFoundError:
                 return InstallResult(
                     success=False, name="", npm_name=registry_name, pkg_type="", version="",
-                    error=f"npm install failed: {result.stderr.strip()}",
+                    error="npm not found — ensure Node.js is installed in the backend container",
                 )
-        except FileNotFoundError:
+            except subprocess.TimeoutExpired:
+                attempts.append(f"[{label}] timed out")
+                break
+            if result.returncode == 0:
+                installed = True
+                break
+            attempts.append(f"[{label}] {result.stderr.strip()}")
+            logger.warning("npm install failed via %s, falling back", label)
+
+        if not installed:
             return InstallResult(
                 success=False, name="", npm_name=registry_name, pkg_type="", version="",
-                error="npm not found — ensure Node.js is installed in the backend container",
-            )
-        except subprocess.TimeoutExpired:
-            return InstallResult(
-                success=False, name="", npm_name=registry_name, pkg_type="", version="",
-                error="npm install timed out",
+                error="npm install failed: " + " | ".join(attempts),
             )
 
         # Find the installed package directory
