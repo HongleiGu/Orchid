@@ -3,11 +3,16 @@
 # canonical docker.io names, so the Dockerfiles and docker-compose.yml need no
 # changes.
 #
-# Set ACR_REPO to your repository, without a tag. Use the -vpc- host when the
-# ECS is in the same region as the registry: it is faster and does not bill
-# against public bandwidth.
+# Set ACR_REPO to your repository, without a tag.
 #
-#   export ACR_REPO=registry-vpc.cn-hangzhou.aliyuncs.com/<namespace>/base
+# Endpoint choice: the -vpc host only works from an ECS in the registry's own
+# region, where it stays on Aliyun's intranet (faster, no public bandwidth).
+# From any other region use the public host -- the -vpc name still resolves
+# there via wildcard DNS, but its 100.64.0.0/10 address is unroutable and the
+# pull just hangs. Check the region with:
+#   curl -s http://100.100.100.200/latest/meta-data/region-id
+#
+#   export ACR_REPO=crpi-xxxx.cn-hangzhou.personal.cr.aliyuncs.com/<ns>/base
 #   ./scripts/pull-from-acr.sh
 #
 # Requires: docker login <registry-host> first.
