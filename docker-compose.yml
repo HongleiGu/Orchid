@@ -12,12 +12,14 @@ services:
         NODE_MIRRORS: "${NODE_MIRRORS:-https://mirrors.aliyun.com/nodejs-release https://mirrors.tuna.tsinghua.edu.cn/nodejs-release}"
         NPM_REGISTRIES: "${NPM_REGISTRIES:-https://registry.npmmirror.com https://registry.npmjs.org}"
         NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmmirror.com}"
+    # Loopback only — nginx terminates TLS and proxies to these. Publishing
+    # them on 0.0.0.0 would expose an unauthenticated API beside HTTPS.
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agentapp
       REDIS_URL: redis://redis:6379/0
-      APP_CORS_ORIGINS: "http://localhost:${FRONTEND_PORT:-3000}"
+      APP_CORS_ORIGINS: "${APP_CORS_ORIGINS:-http://localhost:3000}"
       VAULT_DIR: /app/vault
       STATE_DIR: /app/data/state
       # Marketplace installs shell out to npm at runtime (marketplace/service.py)
@@ -83,13 +85,64 @@ services:
     build:
       context: ./frontend
       args:
-        NEXT_PUBLIC_API_URL: "http://localhost:${BACKEND_PORT:-8000}"
-        NEXT_PUBLIC_WS_URL: "ws://localhost:${BACKEND_PORT:-8000}"
+        # Baked into the client bundle. Behind nginx these are the public
+        # https:// / wss:// origin — set them in .env on the server.
+        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:8000}"
+        NEXT_PUBLIC_WS_URL: "${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}"
         NPM_REGISTRIES: "${NPM_REGISTRIES:-https://registry.npmmirror.com https://registry.npmjs.org}"
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
     depends_on:
       - backend
+    restart: unless-stopped
+
+  # ── nginx (TLS termination + reverse proxy) ──────────────────────────────────
+  # Profile-gated: plain `docker compose up` for local dev never starts these.
+  # On the server put COMPOSE_PROFILES=prod in .env, or pass --profile prod.
+  nginx:
+    image: nginx:1.27-alpine
+    profiles: ["prod"]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: "${DOMAIN:-localhost}"
+      DOMAIN_ALT: "${DOMAIN_ALT:-}"
+      # Substitute only our DOMAIN* vars, never nginx runtime vars like $$host.
+      NGINX_ENVSUBST_FILTER: "^DOMAIN"
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx/certbot/conf:/etc/letsencrypt:ro
+      - ./nginx/certbot/www:/var/www/certbot:ro
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+    # Reload every 6h so renewed certificates are picked up without a restart.
+    # The inner `/docker-entrypoint.sh nginx` call is required, not redundant:
+    # the image only renders conf templates when its entrypoint is invoked with
+    # "nginx" as the first argument, which overriding `command` otherwise skips.
+    command: >
+      sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done &
+             exec /docker-entrypoint.sh nginx -g 'daemon off;'"
+
+  # ── certbot (Let's Encrypt renewal) ──────────────────────────────────────────
+  # First issuance is scripts/init-letsencrypt.sh; this only renews. certbot
+  # exits early unless a cert is within 30 days of expiry, so a 12h loop is cheap.
+  certbot:
+    image: certbot/certbot:latest
+    profiles: ["prod"]
+    volumes:
+      - ./nginx/certbot/conf:/etc/letsencrypt
+      - ./nginx/certbot/www:/var/www/certbot
+    entrypoint: >
+      sh -c "trap exit TERM;
+             while :; do
+               certbot renew --webroot -w /var/www/certbot --quiet;
+               sleep 12h & wait $${!};
+             done"
+    depends_on:
+      - nginx
     restart: unless-stopped
 
   # ── PostgreSQL ────────────────────────────────────────────────────────────────
@@ -99,8 +152,9 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: agentapp
+    # Loopback only: these credentials are defaults and this host is public.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -114,7 +168,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - ./backend/data/redis:/data
     healthcheck:

@@ -34,7 +34,21 @@ or `orchid 0.1.x`.
   timeout budget so retries do not extend the worst case. http:// indexes get
   `--trusted-host` automatically, for Aliyun's intranet endpoint.
 
+- Added an nginx reverse proxy and certbot/Let's Encrypt TLS for the public
+  domain, behind a `prod` compose profile so local dev is unaffected. nginx
+  terminates TLS and proxies `/api/` (including the run-stream WebSocket) to
+  the backend and everything else to Next.js; certbot renews on a 12h loop
+  while nginx reloads every 6h to pick up new certificates.
+- Added `scripts/init-letsencrypt.sh` for first issuance, which works around
+  the bootstrap deadlock (nginx will not start without a certificate; certbot
+  cannot issue one without nginx serving the HTTP-01 challenge) by installing
+  a throwaway self-signed certificate first. Defaults to the staging CA.
+
 ### Fixed
+- Bound the backend, frontend, PostgreSQL, and Redis published ports to
+  127.0.0.1. They were published on all interfaces, which on a public host
+  would expose an unauthenticated API and a PostgreSQL with default
+  credentials alongside the new HTTPS endpoint.
 - Pinned the frontend's pnpm via `packageManager` in `frontend/package.json`
   and switched the Dockerfile to `corepack install`, which reads that field.
   The Dockerfile previously used `corepack prepare pnpm@latest`, which floats:

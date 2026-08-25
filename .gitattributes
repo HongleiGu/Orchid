@@ -1,0 +1,6 @@
+# Anything executed by a shell inside a Linux container must keep LF
+# endings — CRLF yields 'bad interpreter: /usr/bin/env bash^M' on the server.
+*.sh              text eol=lf
+Dockerfile        text eol=lf
+*.template        text eol=lf
+docker-compose.yml text eol=lf

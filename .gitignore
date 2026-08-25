@@ -14,6 +14,9 @@ __pycache__/
 # Docker persistent data
 backend/data/
 
+# TLS certificates and ACME state (contains private keys)
+nginx/certbot/
+
 # Vault content (user data)
 vault/
 !vault/.orchid/
