@@ -83,11 +83,16 @@ fi
 
 mkdir -p "$CERT_ROOT" ./nginx/certbot/www
 
+# nginx cannot start when ssl_certificate points at a missing file, so a
+# throwaway cert has to exist before nginx comes up -- and has to be put back
+# if issuance fails, otherwise a failed run leaves nginx unable to boot at all.
+make_dummy_cert() {
+  mkdir -p "$LIVE_DIR"
+  $DC run --rm --no-deps --entrypoint sh certbot -c "openssl req -x509 -nodes -newkey rsa:2048 -days 1 -keyout /etc/letsencrypt/live/$DOMAIN/privkey.pem -out /etc/letsencrypt/live/$DOMAIN/fullchain.pem -subj /CN=$DOMAIN" 2>&1 | sed "s/^/    /"
+}
+
 echo "==> 1/5 installing throwaway self-signed cert so nginx can start"
-mkdir -p "$LIVE_DIR"
-# Single line on purpose: newlines inside the sh -c payload would end the
-# openssl command and turn its arguments into separate commands.
-$DC run --rm --no-deps --entrypoint sh certbot -c "openssl req -x509 -nodes -newkey rsa:2048 -days 1 -keyout /etc/letsencrypt/live/$DOMAIN/privkey.pem -out /etc/letsencrypt/live/$DOMAIN/fullchain.pem -subj /CN=$DOMAIN" 2>&1 | sed 's/^/    /'
+make_dummy_cert
 
 echo "==> 2/5 starting nginx"
 $DC up -d nginx
@@ -96,7 +101,17 @@ echo "==> 3/5 removing throwaway cert"
 $DC run --rm --no-deps --entrypoint sh certbot -c "rm -rf /etc/letsencrypt/live/$DOMAIN /etc/letsencrypt/archive/$DOMAIN /etc/letsencrypt/renewal/$DOMAIN.conf"
 
 echo "==> 4/5 requesting certificate from Let's Encrypt"
-$DC run --rm --no-deps --entrypoint certbot certbot certonly --webroot -w /var/www/certbot "${STAGING_ARGS[@]}" "${DOMAIN_ARGS[@]}" --email "$CERTBOT_EMAIL" --agree-tos --no-eff-email --non-interactive
+if ! $DC run --rm --no-deps --entrypoint certbot certbot certonly --webroot -w /var/www/certbot "${STAGING_ARGS[@]}" "${DOMAIN_ARGS[@]}" --email "$CERTBOT_EMAIL" --agree-tos --no-eff-email --non-interactive; then
+  echo >&2
+  echo "Issuance failed. Restoring the throwaway cert so nginx can still run," >&2
+  echo "then restarting it -- otherwise nginx is left unable to start at all." >&2
+  make_dummy_cert
+  $DC up -d --force-recreate nginx
+  echo >&2
+  echo "nginx is serving again on port 80 with an untrusted cert, so the ACME" >&2
+  echo "challenge path stays testable. Re-run this script once the cause is fixed." >&2
+  exit 1
+fi
 
 echo "==> 5/5 reloading nginx"
 $DC exec nginx nginx -s reload
