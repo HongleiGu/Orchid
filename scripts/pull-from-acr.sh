@@ -18,7 +18,15 @@
 # Requires: docker login <registry-host> first.
 set -u
 
-: "${ACR_REPO:?set ACR_REPO, e.g. registry-vpc.cn-hangzhou.aliyuncs.com/orchid/base}"
+# Accept the repo as an argument too. `sudo` drops the caller's environment
+# unless -E is passed, so an exported ACR_REPO silently vanishes under sudo;
+# passing it positionally sidesteps that entirely.
+ACR_REPO="${1:-${ACR_REPO:-}}"
+[ -n "$ACR_REPO" ] || {
+  echo "usage: $0 <acr-repo>   (or export ACR_REPO)" >&2
+  echo "  e.g. $0 crpi-xxxx.cn-hangzhou.personal.cr.aliyuncs.com/orchid-docker/base" >&2
+  exit 2
+}
 
 # <acr tag>=<canonical docker.io name>
 MAP="
