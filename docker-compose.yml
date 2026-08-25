@@ -111,7 +111,8 @@ services:
       # Substitute only our DOMAIN* vars, never nginx runtime vars like $$host.
       NGINX_ENVSUBST_FILTER: "^DOMAIN"
     volumes:
-      - ./nginx/templates:/etc/nginx/templates:ro
+      # templates-http (plain HTTP) or templates-tls (443 + redirect).
+      - ./nginx/${NGINX_TEMPLATE_DIR:-templates-http}:/etc/nginx/templates:ro
       - ./nginx/certbot/conf:/etc/letsencrypt:ro
       - ./nginx/certbot/www:/var/www/certbot:ro
     depends_on:
@@ -131,7 +132,9 @@ services:
   # exits early unless a cert is within 30 days of expiry, so a 12h loop is cheap.
   certbot:
     image: certbot/certbot:latest
-    profiles: ["prod"]
+    # Its own profile: running plain HTTP should not start a renewal loop for a
+    # certificate that does not exist. Enable with COMPOSE_PROFILES=prod,tls.
+    profiles: ["tls"]
     volumes:
       - ./nginx/certbot/conf:/etc/letsencrypt
       - ./nginx/certbot/www:/var/www/certbot

@@ -54,6 +54,13 @@ or `orchid 0.1.x`.
   and aborts if that mirror fails partway through a blob, so a broken
   accelerator blocks the build even with healthy mirrors listed after it.
 
+- Made the nginx config selectable via `NGINX_TEMPLATE_DIR`: `templates-http`
+  serves plain HTTP on port 80, `templates-tls` terminates TLS on 443. Both
+  keep the `/.well-known/acme-challenge/` location, so a certificate can be
+  issued later without editing nginx -- only the env var changes.
+- Moved certbot into its own `tls` profile, so running plain HTTP no longer
+  starts a renewal loop for a certificate that does not exist.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host
