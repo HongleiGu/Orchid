@@ -48,6 +48,11 @@ or `orchid 0.1.x`.
   literal upstream nginx resolves once at startup, which meant it refused to
   start if backend or frontend was briefly absent, and kept 502ing on a stale
   container IP after either was redeployed until the next reload.
+- Added `scripts/pull-base-images.sh`, which pulls the base images by naming a
+  mirror registry explicitly and retags them to their docker.io names. The
+  daemon's `registry-mirrors` list is not a real fallback chain: it picks one
+  and aborts if that mirror fails partway through a blob, so a broken
+  accelerator blocks the build even with healthy mirrors listed after it.
 
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
