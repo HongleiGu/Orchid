@@ -43,6 +43,11 @@ or `orchid 0.1.x`.
   the bootstrap deadlock (nginx will not start without a certificate; certbot
   cannot issue one without nginx serving the HTTP-01 challenge) by installing
   a throwaway self-signed certificate first. Defaults to the staging CA.
+- Resolved nginx upstreams through Docker's embedded DNS (127.0.0.11) with a
+  variable-based `proxy_pass`, so they are re-resolved per request. With a
+  literal upstream nginx resolves once at startup, which meant it refused to
+  start if backend or frontend was briefly absent, and kept 502ing on a stale
+  container IP after either was redeployed until the next reload.
 
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
