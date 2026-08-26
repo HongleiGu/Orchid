@@ -66,7 +66,10 @@ echo "==> 3/4 registering with $ACME_CA and issuing via Aliyun DNS API"
 # ZeroSSL requires an EAB binding; acme.sh fetches it from the email. Harmless
 # for the other CAs, and idempotent once registered.
 $DC run --rm --no-deps acme --register-account -m "$ACME_EMAIL" --server "$ACME_CA"
-$DC run --rm --no-deps acme --issue --dns dns_ali --server "$ACME_CA" "${DOMAIN_ARGS[@]}"
+# Extra args pass through, so a failure can be re-run as:
+#     ./scripts/issue-cert-acmesh.sh --debug 2
+# which is what surfaces the DNS provider's actual error code.
+$DC run --rm --no-deps acme --issue --dns dns_ali --server "$ACME_CA" "${DOMAIN_ARGS[@]}" "$@"
 
 echo "==> 4/4 installing the certificate where nginx reads it"
 # --reloadcmd is deliberately a no-op: the acme container cannot signal nginx in
