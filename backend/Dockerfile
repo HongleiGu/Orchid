@@ -4,8 +4,8 @@ FROM python:3.11-slim AS builder
 # Ordered mirror chains — each is tried in turn, first one that works wins.
 # Defaults are CN-first (Aliyun → Tsinghua → upstream) because this deploys in
 # mainland China; override in .env to flip the order elsewhere.
-ARG PIP_INDEX_URLS="https://mirrors.aliyun.com/pypi/simple/ https://pypi.tuna.tsinghua.edu.cn/simple https://pypi.org/simple"
-ARG APT_MIRRORS="mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn deb.debian.org"
+ARG PIP_INDEX_URLS="https://pypi.org/simple https://mirrors.aliyun.com/pypi/simple/"
+ARG APT_MIRRORS="deb.debian.org mirrors.aliyun.com"
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_DEFAULT_TIMEOUT=120
@@ -53,15 +53,15 @@ RUN set -eu; \
 FROM python:3.11-slim
 
 # ARGs do not cross stage boundaries — redeclare what this stage needs.
-ARG APT_MIRRORS="mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn deb.debian.org"
-ARG NODE_MIRRORS="https://mirrors.aliyun.com/nodejs-release https://mirrors.tuna.tsinghua.edu.cn/nodejs-release"
+ARG APT_MIRRORS="deb.debian.org mirrors.aliyun.com"
+ARG NODE_MIRRORS="https://nodejs.org/dist https://mirrors.aliyun.com/nodejs-release"
 ARG NODE_VERSION=20.18.1
 # Runtime installers read these; keep the single-value vars equal to the first
 # entry of their list, for anything that only understands the conventional name.
-ARG PIP_INDEX_URLS="https://mirrors.aliyun.com/pypi/simple/ https://pypi.tuna.tsinghua.edu.cn/simple https://pypi.org/simple"
-ARG PIP_INDEX_URL="https://mirrors.aliyun.com/pypi/simple/"
-ARG NPM_REGISTRIES="https://registry.npmmirror.com https://registry.npmjs.org"
-ARG NPM_REGISTRY="https://registry.npmmirror.com"
+ARG PIP_INDEX_URLS="https://pypi.org/simple https://mirrors.aliyun.com/pypi/simple/"
+ARG PIP_INDEX_URL="https://pypi.org/simple"
+ARG NPM_REGISTRIES="https://registry.npmjs.org https://registry.npmmirror.com"
+ARG NPM_REGISTRY="https://registry.npmjs.org"
 
 RUN set -eu; \
     src=/etc/apt/sources.list.d/debian.sources; \

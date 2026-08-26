@@ -4,9 +4,9 @@ FROM python:3.11-slim
 # CN-first by default; override in .env to flip the order elsewhere.
 # PIP_INDEX_URLS persists into the running container on purpose: /install-deps
 # shells out to pip at runtime and walks the same chain (see main.py).
-ARG PIP_INDEX_URLS="https://mirrors.aliyun.com/pypi/simple/ https://pypi.tuna.tsinghua.edu.cn/simple https://pypi.org/simple"
-ARG PIP_INDEX_URL="https://mirrors.aliyun.com/pypi/simple/"
-ARG APT_MIRRORS="mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn deb.debian.org"
+ARG PIP_INDEX_URLS="https://pypi.org/simple https://mirrors.aliyun.com/pypi/simple/"
+ARG PIP_INDEX_URL="https://pypi.org/simple"
+ARG APT_MIRRORS="deb.debian.org mirrors.aliyun.com"
 
 ENV PIP_INDEX_URLS="${PIP_INDEX_URLS}" \
     PIP_INDEX_URL="${PIP_INDEX_URL}" \

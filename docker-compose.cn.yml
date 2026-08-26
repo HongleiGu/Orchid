@@ -1,0 +1,50 @@
+# Mainland-China mirror overrides.
+#
+# The base docker-compose.yml defaults to upstream registries, which is correct
+# for a local dev machine and for any server outside the mainland (Hong Kong,
+# overseas). This file flips every package chain to Aliyun-first. Enable it from
+# .env:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.cn.yml
+#
+# Docker's own IMAGE registry mirror is deliberately absent here: it lives in
+# the host's /etc/docker/daemon.json and cannot be set from compose at all.
+# See docker-mirror/README.md for the ACR route when Docker Hub is unreachable.
+
+x-pip-urls: &pip-urls "https://mirrors.aliyun.com/pypi/simple/ https://pypi.tuna.tsinghua.edu.cn/simple https://pypi.org/simple"
+x-pip-url:  &pip-url  "https://mirrors.aliyun.com/pypi/simple/"
+x-npm-regs: &npm-regs "https://registry.npmmirror.com https://registry.npmjs.org"
+x-npm-reg:  &npm-reg  "https://registry.npmmirror.com"
+x-apt:      &apt      "mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn deb.debian.org"
+x-node:     &node     "https://mirrors.aliyun.com/nodejs-release https://mirrors.tuna.tsinghua.edu.cn/nodejs-release"
+
+services:
+  backend:
+    build:
+      args:
+        PIP_INDEX_URLS: *pip-urls
+        PIP_INDEX_URL: *pip-url
+        APT_MIRRORS: *apt
+        NODE_MIRRORS: *node
+        NPM_REGISTRIES: *npm-regs
+        NPM_REGISTRY: *npm-reg
+    environment:
+      PIP_INDEX_URLS: *pip-urls
+      PIP_INDEX_URL: *pip-url
+      NPM_REGISTRIES: *npm-regs
+      npm_config_registry: *npm-reg
+
+  skill-runner:
+    build:
+      args:
+        PIP_INDEX_URLS: *pip-urls
+        PIP_INDEX_URL: *pip-url
+        APT_MIRRORS: *apt
+    environment:
+      PIP_INDEX_URLS: *pip-urls
+      PIP_INDEX_URL: *pip-url
+
+  frontend:
+    build:
+      args:
+        NPM_REGISTRIES: *npm-regs

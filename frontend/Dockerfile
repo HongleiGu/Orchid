@@ -10,7 +10,7 @@
 
 # ── Install deps ───────────────────────────────────────────────────────────────
 FROM node:20-alpine AS deps
-ARG NPM_REGISTRIES="https://registry.npmmirror.com https://registry.npmjs.org"
+ARG NPM_REGISTRIES="https://registry.npmjs.org https://registry.npmmirror.com"
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN set -eu; \
@@ -30,7 +30,7 @@ RUN pnpm install --frozen-lockfile
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
-ARG NPM_REGISTRIES="https://registry.npmmirror.com https://registry.npmjs.org"
+ARG NPM_REGISTRIES="https://registry.npmjs.org https://registry.npmmirror.com"
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .

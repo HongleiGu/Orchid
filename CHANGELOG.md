@@ -61,6 +61,12 @@ or `orchid 0.1.x`.
 - Moved certbot into its own `tls` profile, so running plain HTTP no longer
   starts a renewal loop for a certificate that does not exist.
 
+- Flipped every package-mirror default to upstream-first and moved the
+  Aliyun-first chains into `docker-compose.cn.yml`, layered on via
+  `COMPOSE_FILE` for a mainland-China host only. The axis that matters is
+  network location rather than dev/prod: an overseas server wants the same
+  upstream registries a local machine does.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host

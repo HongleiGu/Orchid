@@ -6,12 +6,12 @@ services:
       # Ordered mirror chains, highest priority first — each is tried in turn.
       # CN-first by default (Aliyun -> Tsinghua -> upstream); override in .env.
       args:
-        PIP_INDEX_URLS: "${PIP_INDEX_URLS:-https://mirrors.aliyun.com/pypi/simple/ https://pypi.tuna.tsinghua.edu.cn/simple https://pypi.org/simple}"
-        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
-        APT_MIRRORS: "${APT_MIRRORS:-mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn deb.debian.org}"
-        NODE_MIRRORS: "${NODE_MIRRORS:-https://mirrors.aliyun.com/nodejs-release https://mirrors.tuna.tsinghua.edu.cn/nodejs-release}"
-        NPM_REGISTRIES: "${NPM_REGISTRIES:-https://registry.npmmirror.com https://registry.npmjs.org}"
-        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmmirror.com}"
+        PIP_INDEX_URLS: "${PIP_INDEX_URLS:-https://pypi.org/simple https://mirrors.aliyun.com/pypi/simple/}"
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.org/simple}"
+        APT_MIRRORS: "${APT_MIRRORS:-deb.debian.org mirrors.aliyun.com}"
+        NODE_MIRRORS: "${NODE_MIRRORS:-https://nodejs.org/dist https://mirrors.aliyun.com/nodejs-release}"
+        NPM_REGISTRIES: "${NPM_REGISTRIES:-https://registry.npmjs.org https://registry.npmmirror.com}"
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmjs.org}"
     # Loopback only — nginx terminates TLS and proxies to these. Publishing
     # them on 0.0.0.0 would expose an unauthenticated API beside HTTPS.
     ports:
@@ -25,10 +25,10 @@ services:
       # Marketplace installs shell out to npm at runtime (marketplace/service.py)
       # and walk NPM_REGISTRIES in order — mirrors must be set here, not just at
       # build. The single-value vars are the first entry of their chain.
-      PIP_INDEX_URLS: "${PIP_INDEX_URLS:-https://mirrors.aliyun.com/pypi/simple/ https://pypi.tuna.tsinghua.edu.cn/simple https://pypi.org/simple}"
-      PIP_INDEX_URL: "${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
-      NPM_REGISTRIES: "${NPM_REGISTRIES:-https://registry.npmmirror.com https://registry.npmjs.org}"
-      npm_config_registry: "${NPM_REGISTRY:-https://registry.npmmirror.com}"
+      PIP_INDEX_URLS: "${PIP_INDEX_URLS:-https://pypi.org/simple https://mirrors.aliyun.com/pypi/simple/}"
+      PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.org/simple}"
+      NPM_REGISTRIES: "${NPM_REGISTRIES:-https://registry.npmjs.org https://registry.npmmirror.com}"
+      npm_config_registry: "${NPM_REGISTRY:-https://registry.npmjs.org}"
     env_file:
       - .env
     depends_on:
@@ -52,9 +52,9 @@ services:
     build:
       context: ./backend/skill-runner
       args:
-        PIP_INDEX_URLS: "${PIP_INDEX_URLS:-https://mirrors.aliyun.com/pypi/simple/ https://pypi.tuna.tsinghua.edu.cn/simple https://pypi.org/simple}"
-        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
-        APT_MIRRORS: "${APT_MIRRORS:-mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn deb.debian.org}"
+        PIP_INDEX_URLS: "${PIP_INDEX_URLS:-https://pypi.org/simple https://mirrors.aliyun.com/pypi/simple/}"
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.org/simple}"
+        APT_MIRRORS: "${APT_MIRRORS:-deb.debian.org mirrors.aliyun.com}"
     volumes:
       - ./backend/data/packages/node_modules:/packages/node_modules:ro
       - ./backend/app/skills/bundled:/bundled:ro
@@ -68,8 +68,8 @@ services:
       STATE_DIR: /state
       # /install-deps shells out to pip at runtime and walks the same chain
       # (skill-runner/main.py).
-      PIP_INDEX_URLS: "${PIP_INDEX_URLS:-https://mirrors.aliyun.com/pypi/simple/ https://pypi.tuna.tsinghua.edu.cn/simple https://pypi.org/simple}"
-      PIP_INDEX_URL: "${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
+      PIP_INDEX_URLS: "${PIP_INDEX_URLS:-https://pypi.org/simple https://mirrors.aliyun.com/pypi/simple/}"
+      PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.org/simple}"
     env_file:
       - .env
     restart: unless-stopped
@@ -89,7 +89,7 @@ services:
         # https:// / wss:// origin — set them in .env on the server.
         NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:8000}"
         NEXT_PUBLIC_WS_URL: "${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}"
-        NPM_REGISTRIES: "${NPM_REGISTRIES:-https://registry.npmmirror.com https://registry.npmjs.org}"
+        NPM_REGISTRIES: "${NPM_REGISTRIES:-https://registry.npmjs.org https://registry.npmmirror.com}"
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
     depends_on:
