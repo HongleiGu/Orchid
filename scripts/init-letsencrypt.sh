@@ -35,12 +35,20 @@ set +a
 : "${CERTBOT_EMAIL:?set CERTBOT_EMAIL in .env — the ACME contact address for expiry warnings}"
 DOMAIN_ALT="${DOMAIN_ALT:-}"
 CERTBOT_STAGING="${CERTBOT_STAGING:-1}"
+# webroot    = HTTP-01, fully automatic, renews unattended.
+# manual-dns = DNS-01, prints a TXT record for you to add by hand.
+CERTBOT_MODE="${CERTBOT_MODE:-webroot}"
 
 CERT_ROOT="./nginx/certbot/conf"
 LIVE_DIR="$CERT_ROOT/live/$DOMAIN"
 
 DOMAIN_ARGS=(-d "$DOMAIN")
 [ -n "$DOMAIN_ALT" ] && DOMAIN_ARGS+=(-d "$DOMAIN_ALT")
+
+case "$CERTBOT_MODE" in
+  webroot|manual-dns) ;;
+  *) echo "CERTBOT_MODE must be webroot or manual-dns (got: $CERTBOT_MODE)" >&2; exit 2 ;;
+esac
 
 STAGING_ARGS=()
 if [ "$CERTBOT_STAGING" = "1" ]; then
@@ -102,8 +110,25 @@ $DC up -d nginx
 echo "==> 3/5 removing throwaway cert"
 $DC run --rm --no-deps --entrypoint sh certbot -c "rm -rf /etc/letsencrypt/live/$DOMAIN /etc/letsencrypt/archive/$DOMAIN /etc/letsencrypt/renewal/$DOMAIN.conf"
 
-echo "==> 4/5 requesting certificate from Let's Encrypt"
-if ! $DC run --rm --no-deps --entrypoint certbot certbot certonly --webroot -w /var/www/certbot "${STAGING_ARGS[@]}" "${DOMAIN_ARGS[@]}" --email "$CERTBOT_EMAIL" --agree-tos --no-eff-email --non-interactive; then
+echo "==> 4/5 requesting certificate from Let's Encrypt ($CERTBOT_MODE)"
+if [ "$CERTBOT_MODE" = "manual-dns" ]; then
+  echo
+  echo "certbot will pause and print a TXT record per domain. Add each one in" >&2
+  echo "your DNS console, WAIT for it to be visible from a public resolver, then" >&2
+  echo "press Enter. Checking before you continue avoids a failed validation:" >&2
+  echo "    dig +short TXT _acme-challenge.$DOMAIN @8.8.8.8" >&2
+  echo
+  echo "Note: certificates issued this way do NOT renew automatically -- the" >&2
+  echo "certbot container cannot replay a manual step. Re-run this script before" >&2
+  echo "the 90-day expiry, or move back to CERTBOT_MODE=webroot once DNS is sound." >&2
+  echo
+  # No --non-interactive and no -T: certbot must be able to prompt.
+  CERTBOT_CMD=(certonly --manual --preferred-challenges dns)
+else
+  CERTBOT_CMD=(certonly --webroot -w /var/www/certbot --non-interactive)
+fi
+
+if ! $DC run --rm --no-deps --entrypoint certbot certbot "${CERTBOT_CMD[@]}" "${STAGING_ARGS[@]}" "${DOMAIN_ARGS[@]}" --email "$CERTBOT_EMAIL" --agree-tos --no-eff-email; then
   echo >&2
   echo "Issuance failed. Restoring the throwaway cert so nginx can still run," >&2
   echo "then restarting it -- otherwise nginx is left unable to start at all." >&2
