@@ -148,6 +148,31 @@ services:
       - nginx
     restart: unless-stopped
 
+  # ── acme.sh (alternative to certbot: DNS-01 via the Aliyun API) ─────────────
+  # Use when HTTP-01 cannot work -- e.g. Let's Encrypt cannot resolve the domain
+  # from all its vantage points, or port 80 is unreachable. Unlike certbot's
+  # --manual mode this renews unattended, because the DNS update is an API call.
+  # One-off issuance: scripts/issue-cert-acmesh.sh
+  # Enable with COMPOSE_PROFILES=prod,acme (instead of prod,tls).
+  acme:
+    image: neilpang/acme.sh:latest
+    profiles: ["acme"]
+    environment:
+      # Aliyun RAM AccessKey with DNS permissions. acme.sh expects these exact
+      # names; .env uses ALI_KEY / ALI_SECRET to keep the file consistent.
+      Ali_Key: "${ALI_KEY:-}"
+      Ali_Secret: "${ALI_SECRET:-}"
+    volumes:
+      # acme.sh's own state: account keys, renewal config. Must persist or every
+      # run re-registers and renewal forgets what it installed where.
+      - ./nginx/acme:/acme.sh
+      # Where nginx reads certificates from (mounted read-only on that side).
+      - ./nginx/certbot/conf:/certs
+    # Daemon mode runs acme.sh's cron, renewing ~60 days in. nginx reloads every
+    # 6h on its own, so it picks the new cert up without being signalled.
+    command: daemon
+    restart: unless-stopped
+
   # ── PostgreSQL ────────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine

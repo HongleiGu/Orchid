@@ -67,6 +67,12 @@ or `orchid 0.1.x`.
   network location rather than dev/prod: an overseas server wants the same
   upstream registries a local machine does.
 
+- Added acme.sh as an alternative certificate issuer, driving DNS-01 through
+  the Aliyun DNS API (`scripts/issue-cert-acmesh.sh`, `acme` compose profile).
+  It needs no inbound port 80 and defaults to ZeroSSL rather than Let's
+  Encrypt, and unlike certbot's manual DNS mode it renews unattended, since
+  the DNS update is an API call rather than a hand-entered record.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host

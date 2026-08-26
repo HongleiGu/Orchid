@@ -16,6 +16,7 @@ backend/data/
 
 # TLS certificates and ACME state (contains private keys)
 nginx/certbot/
+nginx/acme/
 
 # Image archives staged for transfer to the server -- never commit these
 *.tar.gz
