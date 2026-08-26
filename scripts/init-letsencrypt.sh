@@ -14,10 +14,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Both profiles: nginx is in "prod", certbot is in "tls". Naming only "prod"
+# would leave certbot outside the active set.
 if docker compose version >/dev/null 2>&1; then
-  DC="docker compose --profile prod"
+  DC="docker compose --profile prod --profile tls"
 elif command -v docker-compose >/dev/null 2>&1; then
-  DC="docker-compose --profile prod"
+  DC="docker-compose --profile prod --profile tls"
 else
   echo "ERROR: neither 'docker compose' nor 'docker-compose' found" >&2
   exit 1
