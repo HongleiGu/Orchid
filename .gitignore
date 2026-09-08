@@ -7,7 +7,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 
-# SQLite (local dev)
+# Stray local database files (the project uses Postgres)
 *.db
 *.sqlite3
 

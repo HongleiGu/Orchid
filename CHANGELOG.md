@@ -100,11 +100,12 @@ or `orchid 0.1.x`.
   stopped updating.
 
 - Standardised on PostgreSQL and dropped SQLite. SQLite was never really
-  supported: there are no dialect branches anywhere, `alembic/env.py` has no
-  batch mode (so any ALTER/DROP migration would have failed on it), and no test
-  ever exercised it — yet it was the default, so a fresh clone ran on the one
-  untested dialect. Removes the batch-mode work, keeps dev matching prod, and
-  leaves pgvector available for the vault-retrieval epic.
+  supported: there are no dialect branches anywhere and no test ever exercised
+  it — yet it was the default, so a fresh clone ran on the one untested
+  dialect. Keeps dev matching prod and leaves pgvector available for the
+  vault-retrieval epic. (Correction to the commit message: the existing
+  migrations do use `op.batch_alter_table`, which is SQLite-safe, so they
+  would not have failed there. `render_as_batch` only affects autogenerate.)
 - Added a startup warning when the database schema is behind the migrations.
   A stale database otherwise surfaces as `UndefinedColumn` deep inside an
   unrelated request, which reads like an application bug; the check names the
