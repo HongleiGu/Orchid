@@ -119,7 +119,12 @@ async def api_key_middleware(request: Request, call_next):
     ):
         return await call_next(request)
 
-    if not await authenticate(extract_key(request)):
+    ok, user_id = await authenticate(extract_key(request))
+    # Stashed so handlers can attribute work without re-authenticating. None is
+    # a legitimate value (static key), so handlers must treat it as "unknown
+    # user", not "not set".
+    request.state.user_id = user_id
+    if not ok:
         return JSONResponse(
             status_code=401,
             content=ErrorResponse(
@@ -151,7 +156,8 @@ async def product_profile_middleware(request: Request, call_next):
     ):
         return await call_next(request)
 
-    if settings.auth_enabled and not await authenticate(extract_key(request)):
+    authed, _ = await authenticate(extract_key(request))
+    if settings.auth_enabled and not authed:
         return await call_next(request)   # let the auth middleware return 401
 
     if not is_request_permitted(request.method, request.url.path):

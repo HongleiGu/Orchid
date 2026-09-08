@@ -17,6 +17,11 @@ class TokenUsage(Base):
         String(26), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
     )
     agent_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Denormalised from the run: quota is checked before every LLM call, so
+    # this is the hot path and an indexed filter beats a join through runs.
+    user_id: Mapped[str | None] = mapped_column(
+        String(26), ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -34,9 +34,18 @@ async def record_usage(
     input_tokens: int,
     output_tokens: int,
 ) -> TokenUsage:
-    """Record a single LLM call's token usage."""
+    """Record a single LLM call's token usage.
+
+    The user is copied from the run rather than threaded through the agent
+    loop, which does not know who started it. One indexed primary-key lookup
+    per call, in a session this function already opens.
+    """
+    from app.db.models.run import Run
+
     cost = estimate_cost(model, input_tokens, output_tokens)
     async with AsyncSessionLocal() as db:
+        run = await db.get(Run, run_id)
+        user_id = run.user_id if run else None
         usage = TokenUsage(
             run_id=run_id,
             agent_name=agent_name,
@@ -44,20 +53,30 @@ async def record_usage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost_usd=cost,
+            user_id=user_id,
         )
         db.add(usage)
         await db.commit()
     return usage
 
 
-async def check_budget(run_id: str, task_id: str, agent_id: str | None) -> None:
+async def check_budget(
+    run_id: str, task_id: str, agent_id: str | None, user_id: str | None = None
+) -> None:
     """Check all applicable budget limits. Raises BudgetExceeded if any are hit."""
     async with AsyncSessionLocal() as db:
         # Get run totals so far
         run_totals = await _get_run_totals(db, run_id)
 
-        # Check limits in order: global → agent → task
-        limits = await _get_applicable_limits(db, task_id, agent_id)
+        # Resolved here rather than threaded through the agent loop, which has
+        # no notion of who started the run.
+        if user_id is None:
+            from app.db.models.run import Run
+            run = await db.get(Run, run_id)
+            user_id = run.user_id if run else None
+
+        # Check limits in order: global → agent → task → user
+        limits = await _get_applicable_limits(db, task_id, agent_id, user_id)
 
         for limit in limits:
             # Per-run token limit
@@ -202,13 +221,19 @@ async def _get_run_totals(db: AsyncSession, run_id: str) -> dict:
 
 
 async def _get_applicable_limits(
-    db: AsyncSession, task_id: str, agent_id: str | None
+    db: AsyncSession, task_id: str, agent_id: str | None, user_id: str | None = None
 ) -> list[BudgetLimit]:
-    """Get all limits that apply, ordered global → agent → task."""
+    """Get all limits that apply, ordered global → agent → task → user.
+
+    A per-user quota is a scope value, not a new table: budget_limits already
+    keys on scope_type/scope_id.
+    """
     scope_filters = [BudgetLimit.scope_id == "global"]
     if agent_id:
         scope_filters.append(BudgetLimit.scope_id == agent_id)
     scope_filters.append(BudgetLimit.scope_id == task_id)
+    if user_id:
+        scope_filters.append(BudgetLimit.scope_id == user_id)
 
     from sqlalchemy import or_
     result = await db.execute(
@@ -228,6 +253,14 @@ async def _get_period_cost(
     if scope_type == "global":
         result = await db.execute(
             select(func.sum(TokenUsage.cost_usd)).where(TokenUsage.ts >= cutoff)
+        )
+    elif scope_type == "user":
+        # Reads token_usage directly rather than joining through runs: this is
+        # evaluated before every LLM call, and a user accumulates far more runs
+        # than a task does.
+        result = await db.execute(
+            select(func.sum(TokenUsage.cost_usd))
+            .where(TokenUsage.ts >= cutoff, TokenUsage.user_id == scope_id)
         )
     elif scope_type == "agent":
         result = await db.execute(

@@ -76,18 +76,34 @@ async def resolve_user(candidate: str | None):
     from app.auth.keys import verify_key
     from app.db.session import AsyncSessionLocal
 
-    async with AsyncSessionLocal() as db:
-        user = await verify_key(db, candidate)
-        if user is not None:
-            await db.commit()      # persist the coarse last_used_at touch
-        return user
+    try:
+        async with AsyncSessionLocal() as db:
+            user = await verify_key(db, candidate)
+            if user is not None:
+                await db.commit()      # persist the coarse last_used_at touch
+            return user
+    except Exception as exc:
+        # Fail closed. This runs inside the auth middleware, so letting a
+        # database error propagate would turn every request into a 500 while
+        # the database is unreachable — including requests bearing a valid
+        # static key, which needs no database at all. Rejecting is the safe
+        # answer: a caller is denied rather than admitted or crashed.
+        logger.warning("API key lookup failed, rejecting the request: %s", exc)
+        return None
 
 
-async def authenticate(candidate: str | None) -> bool:
-    """True when the key is either a configured static key or a live DB key."""
+async def authenticate(candidate: str | None) -> tuple[bool, str | None]:
+    """Authenticate a key, returning (ok, user_id).
+
+    user_id is None for a static AUTH_API_KEYS key: those authenticate but carry
+    no identity, so their runs are unattributed. That is a deliberate,
+    distinguishable state rather than a failure — it is how the operator's own
+    deployment key behaves.
+    """
     if key_is_valid(candidate):
-        return True
-    return await resolve_user(candidate) is not None
+        return True, None
+    user = await resolve_user(candidate)
+    return (user is not None), (user.id if user else None)
 
 
 async def _has_active_db_key() -> bool:

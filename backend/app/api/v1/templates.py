@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -121,6 +121,7 @@ async def _materialise(template: Template, db: AsyncSession) -> Task:
 @router.post("/{template_id}/run", response_model=DataResponse[RunTemplateOut], status_code=201)
 async def run_template(
     template_id: str,
+    request: Request,
     body: RunTemplateBody | None = None,
     db: AsyncSession = Depends(get_db),
 ):
@@ -160,6 +161,8 @@ async def run_template(
         id=run_id,
         task_id=task.id,
         agent_id=task.agent_id,
+        # None when authenticated with a static key, which carries no identity.
+        user_id=getattr(request.state, "user_id", None),
         status="pending",
         priority=priority,
         runtime_params=inputs,

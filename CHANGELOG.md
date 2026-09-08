@@ -160,6 +160,17 @@ or `orchid 0.1.x`.
   the capability ceiling stays in config. Static `AUTH_API_KEYS` keep working
   alongside, so an upgrade cannot lock an operator out of their own server.
 
+- Attributed runs and token usage to a user (OR-39), and added a per-user cost
+  quota. `budget_limits` needed no schema change — a per-user quota is a new
+  `scope_type` on the existing scope model. `user_id` is nullable because a
+  request authenticated with a static `AUTH_API_KEYS` key legitimately has no
+  identity, and both foreign keys are SET NULL so deleting a user cannot erase
+  the record of what was spent on their behalf.
+- Made API key lookup fail closed on database errors. It runs inside the auth
+  middleware, so a propagating error turned every request into a 500 while the
+  database was unreachable — including requests bearing a static key, which
+  needs no database at all.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host
