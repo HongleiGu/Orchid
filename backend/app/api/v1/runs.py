@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import DataResponse, PageMeta, PageResponse
+from app.api.verbosity import Verbosity, effective, filter_events, redact, visible
 from app.db.models.run import Run, RunEvent
 from app.db.models.usage import TokenUsage
 from app.config import get_settings
@@ -88,6 +89,10 @@ class RunOut(BaseModel):
 
 
 class RunDetail(RunOut):
+    # The level actually applied, which may be below what was asked for when
+    # the profile caps it. Stated so a client is not left wondering why debug
+    # produced no extra detail.
+    verbosity: str = "info"
     events: list[RunEventOut]
     # Agent names are workflow internals, so this stays empty under the
     # run-only profile (OR-35). The total above is always available.
@@ -188,15 +193,25 @@ async def list_runs(
 
 
 @router.get("/{run_id}", response_model=DataResponse[RunDetail])
-async def get_run(run_id: str, db: AsyncSession = Depends(get_db)):
+async def get_run(
+    run_id: str,
+    verbosity: Verbosity = Query(
+        Verbosity.INFO,
+        description="summary | info | debug. Capped by PRODUCT_PROFILE; errors "
+                    "are shown at every level.",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
     run = await db.get(Run, run_id)
     if not run:
         raise HTTPException(404, "Run not found")
+    level = effective(verbosity, get_settings().product_profile)
     events = (
         await db.execute(
             select(RunEvent).where(RunEvent.run_id == run_id).order_by(RunEvent.seq)
         )
     ).scalars().all()
+    events = filter_events(list(events), level)
     costs = await _costs_for_runs([run_id], db)
     # Agent names are workflow internals; the run-only edition gets the total
     # without the breakdown (OR-35).
@@ -209,6 +224,7 @@ async def get_run(run_id: str, db: AsyncSession = Depends(get_db)):
         **RunOut.model_validate(run).model_dump(exclude={"cost"}),
         cost=costs.get(run_id, RunCost()),
         cost_by_agent=by_agent,
+        verbosity=level,
         events=[RunEventOut.model_validate(e) for e in events],
     )
     return DataResponse(data=detail)
@@ -320,6 +336,7 @@ async def stream_run(
     run_id: str,
     request: Request,
     last_event_id: int | None = None,
+    verbosity: Verbosity = Query(Verbosity.INFO),
     db: AsyncSession = Depends(get_db),
 ):
     """Server-sent events for one run.
@@ -342,6 +359,8 @@ async def stream_run(
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
 
     # The browser sends the header; the query parameter is for curl and tests.
+    level = effective(verbosity, get_settings().product_profile)
+
     header_id = request.headers.get("last-event-id")
     if header_id and header_id.isdigit():
         last_event_id = int(header_id)
@@ -358,13 +377,17 @@ async def stream_run(
                 .order_by(RunEvent.seq)
             )
             for ev in rows.scalars():
+                # Advance the cursor even when an event is filtered out, or a
+                # reconnect would replay it forever.
                 replayed_through = ev.seq
+                if not visible(ev.type, ev.payload or {}, level):
+                    continue
                 yield _sse(ev.seq, json.dumps({
                     "type": ev.type,
                     "agent": ev.agent,
                     "span_id": ev.span_id,
                     "parent_span_id": ev.parent_span_id,
-                    "payload": ev.payload,
+                    "payload": redact(ev.type, ev.payload or {}, level),
                     "seq": ev.seq,
                 }))
 
@@ -381,12 +404,21 @@ async def stream_run(
 
                 seq = None
                 try:
-                    seq = json.loads(message).get("seq")
+                    event = json.loads(message)
+                    seq = event.get("seq")
                 except (ValueError, AttributeError):
-                    pass
+                    event = None
                 # Skip whatever the replay already delivered.
                 if isinstance(seq, int) and seq <= replayed_through:
                     continue
+
+                if isinstance(event, dict) and "type" in event:
+                    etype, payload = event.get("type"), event.get("payload") or {}
+                    if not visible(etype, payload, level):
+                        continue
+                    event["payload"] = redact(etype, payload, level)
+                    message = json.dumps(event)
+
                 yield _sse(seq, message)
 
     return StreamingResponse(

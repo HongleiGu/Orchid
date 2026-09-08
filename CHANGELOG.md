@@ -146,6 +146,13 @@ or `orchid 0.1.x`.
   which for DeepSeek overstated a run by roughly 3-4x — tolerable when nothing
   displayed it, misleading now that runs report their cost.
 
+- Added run-trace verbosity (OR-35): `summary` / `info` / `debug` on run detail
+  and the SSE stream, in the logging idiom. Everything is still recorded, so
+  changing level never means re-running. `PRODUCT_PROFILE=app` caps at `info`,
+  since `debug` carries prompts and inter-agent messages. Errors are shown at
+  every level with their diagnostics — deliberately not escalated to full
+  debug, which would let anyone able to induce a failure read the prompts.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host
