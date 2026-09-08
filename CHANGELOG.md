@@ -135,6 +135,17 @@ or `orchid 0.1.x`.
   input names are rejected rather than ignored — a dropped typo would produce
   a plausible but wrong report.
 
+- Surfaced per-run cost on the run object (OR-36): every run carries
+  `cost` (USD, tokens, LLM calls), so a catalog list does not need a second
+  call per row, and run detail adds a per-agent/per-model breakdown. Aggregated
+  from `token_usage` rather than denormalised onto the row, since usage keeps
+  arriving while a run is in flight and a stored copy would be stale exactly
+  when someone is watching.
+- Added DeepSeek to the pricing table and made the unknown-model fallback log
+  once per model. Unlisted models silently used a $1/$3 per-Mtok fallback,
+  which for DeepSeek overstated a run by roughly 3-4x — tolerable when nothing
+  displayed it, misleading now that runs report their cost.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host

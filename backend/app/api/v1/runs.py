@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import DataResponse, PageMeta, PageResponse
 from app.db.models.run import Run, RunEvent
+from app.db.models.usage import TokenUsage
+from app.config import get_settings
 from app.db.session import get_db
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -50,6 +52,22 @@ class CancelSpanOut(BaseModel):
     cancelled: bool
 
 
+class RunCost(BaseModel):
+    """What a run has cost so far, summed from token_usage."""
+
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    llm_calls: int = 0
+
+
+class AgentCost(RunCost):
+    """Per-agent, per-model breakdown within one run."""
+
+    agent: str
+    model: str
+
+
 class RunOut(BaseModel):
     id: str
     task_id: str
@@ -61,17 +79,84 @@ class RunOut(BaseModel):
     result: dict | None
     error: str | None
     created_at: datetime
+    # Aggregated rather than stored on the row: token_usage is the source of
+    # truth and keeps arriving while a run is in flight, so a denormalised copy
+    # would be stale exactly when someone is watching it.
+    cost: RunCost = RunCost()
 
     model_config = {"from_attributes": True}
 
 
 class RunDetail(RunOut):
     events: list[RunEventOut]
+    # Agent names are workflow internals, so this stays empty under the
+    # run-only profile (OR-35). The total above is always available.
+    cost_by_agent: list[AgentCost] = []
 
 
 class CancelOut(BaseModel):
     run_id: str
     status: str
+
+
+# ── Cost aggregation ──────────────────────────────────────────────────────────
+
+async def _costs_for_runs(run_ids: list[str], db: AsyncSession) -> dict[str, RunCost]:
+    """Total cost per run, for a page of runs, in one query.
+
+    Batched by run id rather than joined onto the run query so pagination and
+    ordering stay untouched and there is no risk of row multiplication.
+    """
+    if not run_ids:
+        return {}
+
+    rows = await db.execute(
+        select(
+            TokenUsage.run_id,
+            func.coalesce(func.sum(TokenUsage.cost_usd), 0.0),
+            func.coalesce(func.sum(TokenUsage.input_tokens), 0),
+            func.coalesce(func.sum(TokenUsage.output_tokens), 0),
+            func.count(),
+        )
+        .where(TokenUsage.run_id.in_(run_ids))
+        .group_by(TokenUsage.run_id)
+    )
+    return {
+        run_id: RunCost(
+            cost_usd=float(cost), input_tokens=int(inp),
+            output_tokens=int(outp), llm_calls=int(calls),
+        )
+        for run_id, cost, inp, outp, calls in rows.all()
+    }
+
+
+async def _cost_by_agent(run_id: str, db: AsyncSession) -> list[AgentCost]:
+    """Per-agent, per-model breakdown for one run.
+
+    The finest split the data supports. Attributing cost to an individual tool
+    call would be an allocation rather than a measurement — a tool call spends
+    no tokens itself; it costs by enlarging the context of the turns around it.
+    """
+    rows = await db.execute(
+        select(
+            TokenUsage.agent_name,
+            TokenUsage.model,
+            func.coalesce(func.sum(TokenUsage.cost_usd), 0.0),
+            func.coalesce(func.sum(TokenUsage.input_tokens), 0),
+            func.coalesce(func.sum(TokenUsage.output_tokens), 0),
+            func.count(),
+        )
+        .where(TokenUsage.run_id == run_id)
+        .group_by(TokenUsage.agent_name, TokenUsage.model)
+        .order_by(func.sum(TokenUsage.cost_usd).desc())
+    )
+    return [
+        AgentCost(
+            agent=agent or "", model=model or "", cost_usd=float(cost),
+            input_tokens=int(inp), output_tokens=int(outp), llm_calls=int(calls),
+        )
+        for agent, model, cost, inp, outp, calls in rows.all()
+    ]
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -92,8 +177,12 @@ async def list_runs(
     rows = (
         await db.execute(q.order_by(Run.created_at.desc()).offset((page - 1) * _PAGE_SIZE).limit(_PAGE_SIZE))
     ).scalars().all()
+    costs = await _costs_for_runs([r.id for r in rows], db)
     return PageResponse(
-        data=[RunOut.model_validate(r) for r in rows],
+        data=[
+            RunOut.model_validate(r).model_copy(update={"cost": costs.get(r.id, RunCost())})
+            for r in rows
+        ],
         meta=PageMeta(page=page, page_size=_PAGE_SIZE, total=total),
     )
 
@@ -108,8 +197,18 @@ async def get_run(run_id: str, db: AsyncSession = Depends(get_db)):
             select(RunEvent).where(RunEvent.run_id == run_id).order_by(RunEvent.seq)
         )
     ).scalars().all()
+    costs = await _costs_for_runs([run_id], db)
+    # Agent names are workflow internals; the run-only edition gets the total
+    # without the breakdown (OR-35).
+    by_agent = (
+        [] if get_settings().product_profile == "app"
+        else await _cost_by_agent(run_id, db)
+    )
+
     detail = RunDetail(
-        **RunOut.model_validate(run).model_dump(),
+        **RunOut.model_validate(run).model_dump(exclude={"cost"}),
+        cost=costs.get(run_id, RunCost()),
+        cost_by_agent=by_agent,
         events=[RunEventOut.model_validate(e) for e in events],
     )
     return DataResponse(data=detail)

@@ -4,7 +4,11 @@ Prices as of early 2026. Update as needed.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,15 +45,46 @@ _PRICING: dict[str, ModelPricing] = {
     # Groq (free tier / very cheap)
     "groq/llama-3.3-70b-versatile": ModelPricing(0.59, 0.79),
     "groq/llama-3.1-8b-instant":   ModelPricing(0.05, 0.08),
+    # DeepSeek, called directly rather than through OpenRouter. Mirrors the
+    # openrouter/deepseek/deepseek-chat-v3-0324 entry above. VERIFY against
+    # DeepSeek's current price list before trusting billing numbers — these
+    # are carried over, not confirmed, and DeepSeek has repriced before.
+    "deepseek/deepseek-chat":      ModelPricing(0.27, 1.10),
+    "deepseek/deepseek-reasoner":  ModelPricing(0.55, 2.19),
 }
 
-# Fallback for unknown models
+# Fallback for unknown models. Deliberately expensive: a cost that reads too
+# high prompts someone to add the model, whereas one that reads too low is
+# discovered on an invoice.
 _DEFAULT = ModelPricing(1.0, 3.0)
+
+# Models already reported as unpriced, so the warning fires once each rather
+# than on every call in a run.
+_warned_unknown: set[str] = set()
+
+
+def is_priced(model: str) -> bool:
+    return model in _PRICING
 
 
 def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Estimate cost in USD for a single LLM call."""
-    pricing = _PRICING.get(model, _DEFAULT)
+    """Estimate cost in USD for a single LLM call.
+
+    An unlisted model silently falls back, and the gap can be large — DeepSeek
+    is roughly 50x cheaper than the fallback, so a run would report cents as
+    dollars. Now that per-run cost is surfaced in the API, log it once so the
+    number is known to be an estimate rather than quietly wrong.
+    """
+    pricing = _PRICING.get(model)
+    if pricing is None:
+        pricing = _DEFAULT
+        if model not in _warned_unknown:
+            _warned_unknown.add(model)
+            logger.warning(
+                "No pricing for model %r — using the $%.2f/$%.2f per-Mtok fallback. "
+                "Reported costs for this model are estimates. Add it to _PRICING.",
+                model, _DEFAULT.input_per_m, _DEFAULT.output_per_m,
+            )
     cost = (input_tokens * pricing.input_per_m + output_tokens * pricing.output_per_m) / 1_000_000
     return round(cost, 6)
 
