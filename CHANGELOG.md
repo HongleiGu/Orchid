@@ -127,6 +127,14 @@ or `orchid 0.1.x`.
   restated, keeping one source of truth; the pipeline itself is excluded from
   every response, since the workflow is the product.
 
+- Added `POST /api/v1/templates/{id}/run` as the only way to start a run
+  (OR-33). It resolves inputs against the template's declared schema,
+  materialises the pipeline through the existing config-import path, and
+  queues the run. Triggering an arbitrary task stays denied in the run-only
+  profile, so what may run is exactly what shipped in the catalog. Unknown
+  input names are rejected rather than ignored — a dropped typo would produce
+  a plausible but wrong report.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host

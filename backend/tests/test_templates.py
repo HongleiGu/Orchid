@@ -129,3 +129,63 @@ def test_registry_sorts_by_category_then_name():
     reg.register(Template(id="a", name="Alpha", category="research"))
     reg.register(Template(id="c", name="Alpha", category="finance"))
     assert [t.id for t in reg.all()] == ["c", "b", "a"]
+
+
+# ── Input resolution for a run (OR-33) ────────────────────────────────────────
+
+def _tpl(**inputs):
+    from app.templates.registry import TemplateInput
+    return Template(
+        id="t", name="T",
+        inputs=[TemplateInput(name=n, **spec) for n, spec in inputs.items()],
+    )
+
+
+def test_defaults_are_applied_when_not_provided():
+    from app.api.v1.templates import _resolve_inputs
+    t = _tpl(horizon={"default": "短线"}, lang={"default": "简体中文"})
+    assert _resolve_inputs(t, {}) == {"horizon": "短线", "lang": "简体中文"}
+
+
+def test_provided_values_override_defaults():
+    from app.api.v1.templates import _resolve_inputs
+    t = _tpl(horizon={"default": "短线"})
+    assert _resolve_inputs(t, {"horizon": "中线"}) == {"horizon": "中线"}
+
+
+def test_unknown_inputs_are_rejected_not_ignored():
+    """A silently dropped typo yields a plausible but wrong report, which for
+    this product is worse than an error."""
+    from fastapi import HTTPException
+
+    from app.api.v1.templates import _resolve_inputs
+    t = _tpl(horizon={"default": "短线"})
+    with pytest.raises(HTTPException) as exc:
+        _resolve_inputs(t, {"horzon": "中线"})
+    assert exc.value.status_code == 422
+    assert "horzon" in str(exc.value.detail)
+    assert "horizon" in str(exc.value.detail)      # names what was accepted
+
+
+def test_missing_required_input_is_rejected():
+    from fastapi import HTTPException
+
+    from app.api.v1.templates import _resolve_inputs
+    t = _tpl(ticker={"required": True})
+    with pytest.raises(HTTPException) as exc:
+        _resolve_inputs(t, {})
+    assert exc.value.status_code == 422
+    assert "ticker" in str(exc.value.detail)
+
+
+def test_a_required_input_can_be_supplied():
+    from app.api.v1.templates import _resolve_inputs
+    t = _tpl(ticker={"required": True})
+    assert _resolve_inputs(t, {"ticker": "600519"}) == {"ticker": "600519"}
+
+
+def test_falsy_provided_values_survive():
+    """`False` and `0` must not be lost to a truthiness check."""
+    from app.api.v1.templates import _resolve_inputs
+    t = _tpl(include_global={"type": "boolean", "default": True})
+    assert _resolve_inputs(t, {"include_global": False}) == {"include_global": False}

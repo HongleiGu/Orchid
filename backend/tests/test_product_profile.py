@@ -18,15 +18,16 @@ def _clear_settings_cache():
 # ── API surface allowlist ─────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("method,path", [
+    ("GET", "/api/v1/templates"),
+    ("GET", "/api/v1/templates/china-market-daily-brief"),
+    ("POST", "/api/v1/templates/china-market-daily-brief/run"),
     ("GET", "/api/v1/runs"),
-    ("POST", "/api/v1/runs"),
     ("GET", "/api/v1/runs/01ABC"),
     ("GET", "/api/v1/runs/01ABC/stream"),
     ("POST", "/api/v1/runs/01ABC/cancel"),
     ("GET", "/api/v1/budget/usage"),
     ("GET", "/api/v1/budget/usage/run/01ABC"),
     ("GET", "/api/v1/vault/notes/x.md"),
-    ("GET", "/api/v1/tasks"),
 ])
 def test_allowed(method, path):
     assert is_request_permitted(method, path)
@@ -50,6 +51,19 @@ def test_allowed(method, path):
     # Writes to otherwise-allowed prefixes.
     ("DELETE", "/api/v1/vault/notes/x.md"),
     ("POST", "/api/v1/tasks"),
+    # Running an arbitrary task is exactly what OR-33 forbids: only a template
+    # in the shipped catalog may run.
+    ("POST", "/api/v1/tasks/01ABC/trigger"),
+    ("POST", "/api/v1/tasks/01ABC/trigger/batch"),
+    # /tasks is no longer readable — the catalog serves that need, and task
+    # names and descriptions are workflow internals.
+    ("GET", "/api/v1/tasks"),
+    ("GET", "/api/v1/tasks/01ABC"),
+    # Creating a run directly would sidestep the template gate.
+    ("POST", "/api/v1/runs"),
+    # Templates ship with the release; there is no write surface.
+    ("POST", "/api/v1/templates"),
+    ("DELETE", "/api/v1/templates/china-market-daily-brief"),
 ])
 def test_denied(method, path):
     assert not is_request_permitted(method, path)

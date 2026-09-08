@@ -26,9 +26,13 @@ _RULES: tuple[tuple[frozenset[str], re.Pattern[str]], ...] = (
     (frozenset({"GET"}), re.compile(r"^/api/v1/templates/?$")),
     (frozenset({"GET"}), re.compile(r"^/api/v1/templates/[^/]+/?$")),
 
-    # Runs: list, read, create, and the SSE stream.
+    # Starting a run. This is the *only* entry point, which is what makes "what
+    # may run" identical to "what shipped in the catalog" — /tasks/{id}/trigger
+    # stays denied, so an arbitrary task cannot be run even if one exists.
+    (frozenset({"POST"}), re.compile(r"^/api/v1/templates/[^/]+/run/?$")),
+
+    # Runs: list, read, cancel, and the SSE stream. No create — see above.
     (frozenset({"GET"}), re.compile(r"^/api/v1/runs/?$")),
-    (frozenset({"POST"}), re.compile(r"^/api/v1/runs/?$")),
     (frozenset({"GET"}), re.compile(r"^/api/v1/runs/[^/]+/?$")),
     (frozenset({"GET"}), re.compile(r"^/api/v1/runs/[^/]+/(stream|events)/?$")),
     # Cancelling your own run is a normal user action, not authoring.
@@ -40,12 +44,11 @@ _RULES: tuple[tuple[frozenset[str], re.Pattern[str]], ...] = (
 
     # Outputs.
     (frozenset({"GET"}), re.compile(r"^/api/v1/vault(/.*)?$")),
-
-    # Tasks are read-only here: the catalog needs to list what can be run, but
-    # creating or editing one is authoring. Tighten to templates once OR-34
-    # lands and instantiation stops going through /tasks.
-    (frozenset({"GET"}), re.compile(r"^/api/v1/tasks(/[^/]+)?/?$")),
 )
+
+# /tasks is deliberately absent. It was allowed read-only while templates did
+# not exist; now the catalog serves that purpose, and task names and
+# descriptions are workflow internals a run-only customer has no need for.
 
 # Everything else is refused, including every write to /agents, and all of
 # /workflow-maker, /skill-writer, /marketplace, /config and /providers.
