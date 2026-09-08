@@ -147,7 +147,7 @@ def test_credentials_are_read_from_headers_only(monkeypatch):
     assert not hasattr(api_key, "check_ws_token")
 
 
-def test_production_without_keys_refuses_to_start(monkeypatch):
+async def test_production_without_keys_refuses_to_start(monkeypatch):
     from app.auth import api_key
 
     get_settings.cache_clear()
@@ -155,16 +155,16 @@ def test_production_without_keys_refuses_to_start(monkeypatch):
     monkeypatch.setenv("AUTH_API_KEYS", "")
 
     with pytest.raises(RuntimeError, match="AUTH_API_KEYS"):
-        api_key.verify_startup_configuration()
+        await api_key.verify_startup_configuration()
 
 
-def test_production_with_keys_starts(monkeypatch):
+async def test_production_with_keys_starts(monkeypatch):
     from app.auth import api_key
 
     get_settings.cache_clear()
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("AUTH_API_KEYS", "a-key")
-    api_key.verify_startup_configuration()  # must not raise
+    await api_key.verify_startup_configuration()  # must not raise
 
 
 def test_health_is_the_only_public_path():

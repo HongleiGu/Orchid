@@ -22,10 +22,6 @@ async def lifespan(app: FastAPI):
     # ── Startup ───────────────────────────────────────────────────────────────
     logging.basicConfig(level=settings.app_log_level)
 
-    # 0. Fail fast rather than serving an unauthenticated API in production.
-    from app.auth.api_key import verify_startup_configuration
-    verify_startup_configuration()
-
     # 1. Register ORM models. Schema is managed by Alembic — migrations run
     #    in the docker entrypoint before this process starts. For local dev,
     #    run `alembic upgrade head` manually.
@@ -34,6 +30,12 @@ async def lifespan(app: FastAPI):
 
     from app.db.schema_check import warn_if_schema_is_stale
     await warn_if_schema_is_stale(engine)
+
+    #    Fail fast rather than serving an unauthenticated API in production.
+    #    After the DB is available: a deployment may authenticate entirely
+    #    with issued keys and no static AUTH_API_KEYS at all.
+    from app.auth.api_key import verify_startup_configuration
+    await verify_startup_configuration()
 
     # 2. Register bundled skills as RemoteSkill proxies. Every executable the
     #    LLM can call lives in skill-runner; the backend only holds proxies.
@@ -108,7 +110,7 @@ async def api_key_middleware(request: Request, call_next):
     OPTIONS is exempt because CORS preflight carries no credentials — the browser
     sends the real request, with the key, only once preflight succeeds.
     """
-    from app.auth.api_key import extract_key, is_public_path, key_is_valid
+    from app.auth.api_key import authenticate, extract_key, is_public_path
 
     if (
         not get_settings().auth_enabled
@@ -117,7 +119,7 @@ async def api_key_middleware(request: Request, call_next):
     ):
         return await call_next(request)
 
-    if not key_is_valid(extract_key(request)):
+    if not await authenticate(extract_key(request)):
         return JSONResponse(
             status_code=401,
             content=ErrorResponse(
@@ -138,7 +140,7 @@ async def product_profile_middleware(request: Request, call_next):
     an unauthenticated caller learns which paths exist — so authentication is
     verified here too before refusing on profile grounds.
     """
-    from app.auth.api_key import extract_key, is_public_path, key_is_valid
+    from app.auth.api_key import authenticate, extract_key, is_public_path
     from app.auth.profile import is_request_permitted
 
     settings = get_settings()
@@ -149,7 +151,7 @@ async def product_profile_middleware(request: Request, call_next):
     ):
         return await call_next(request)
 
-    if settings.auth_enabled and not key_is_valid(extract_key(request)):
+    if settings.auth_enabled and not await authenticate(extract_key(request)):
         return await call_next(request)   # let the auth middleware return 401
 
     if not is_request_permitted(request.method, request.url.path):

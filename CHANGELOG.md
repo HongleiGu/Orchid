@@ -153,6 +153,13 @@ or `orchid 0.1.x`.
   every level with their diagnostics — deliberately not escalated to full
   debug, which would let anyone able to induce a failure read the prompts.
 
+- Added users and individually revocable API keys (OR-37), with a CLI to issue,
+  list and revoke them. Keys are 32 random bytes, shown once, stored as an
+  indexed SHA-256 hash. Revocation and user disabling take effect on the next
+  request without a restart — the reason identity belongs in the database while
+  the capability ceiling stays in config. Static `AUTH_API_KEYS` keep working
+  alongside, so an upgrade cannot lock an operator out of their own server.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host
