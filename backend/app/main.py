@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.schemas import ErrorDetail, ErrorResponse
 from app.config import get_settings
+from app.skills.registry import SkillNotPermitted
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -20,6 +21,10 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     # ── Startup ───────────────────────────────────────────────────────────────
     logging.basicConfig(level=settings.app_log_level)
+
+    # 0. Fail fast rather than serving an unauthenticated API in production.
+    from app.auth.api_key import verify_startup_configuration
+    verify_startup_configuration()
 
     # 1. Register ORM models. Schema is managed by Alembic — migrations run
     #    in the docker entrypoint before this process starts. For local dev,
@@ -86,6 +91,36 @@ app.add_middleware(
 )
 
 
+# ── Authentication ────────────────────────────────────────────────────────────
+
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    """Reject unauthenticated requests before they reach any route.
+
+    OPTIONS is exempt because CORS preflight carries no credentials — the browser
+    sends the real request, with the key, only once preflight succeeds.
+    """
+    from app.auth.api_key import extract_key, is_public_path, key_is_valid
+
+    if (
+        not get_settings().auth_enabled
+        or request.method == "OPTIONS"
+        or is_public_path(request.url.path)
+    ):
+        return await call_next(request)
+
+    if not key_is_valid(extract_key(request)):
+        return JSONResponse(
+            status_code=401,
+            content=ErrorResponse(
+                error=ErrorDetail(message="Missing or invalid API key")
+            ).model_dump(),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return await call_next(request)
+
+
 # ── Error handling ────────────────────────────────────────────────────────────
 
 @app.exception_handler(HTTPException)
@@ -93,6 +128,20 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content=ErrorResponse(error=ErrorDetail(message=str(exc.detail))).model_dump(),
+    )
+
+
+@app.exception_handler(SkillNotPermitted)
+async def skill_not_permitted_handler(request: Request, exc: SkillNotPermitted):
+    """Surface a blocked skill as 403 rather than a 500.
+
+    Agents are not validated against the registry at creation time, so a denied
+    skill is discovered when a run resolves it. That is the intended choke point
+    — this handler just makes the failure legible.
+    """
+    return JSONResponse(
+        status_code=403,
+        content=ErrorResponse(error=ErrorDetail(message=str(exc))).model_dump(),
     )
 
 

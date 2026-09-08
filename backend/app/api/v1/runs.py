@@ -205,7 +205,15 @@ async def cancel_run(run_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.websocket("/{run_id}/stream")
 async def stream_run(run_id: str, ws: WebSocket, db: AsyncSession = Depends(get_db)):
+    from app.auth.api_key import check_ws_token
     from app.ws.manager import ws_manager
+
+    # The HTTP middleware cannot cover this: browsers cannot set headers on a
+    # WebSocket handshake, so the key arrives as ?token= instead. Closing with
+    # 4401 before accept() means an unauthenticated client never gets a socket.
+    if not check_ws_token(ws.query_params.get("token")):
+        await ws.close(code=4401, reason="Missing or invalid API key")
+        return
 
     run = await db.get(Run, run_id)
     if not run:

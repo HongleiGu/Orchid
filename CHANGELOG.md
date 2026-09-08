@@ -73,6 +73,21 @@ or `orchid 0.1.x`.
   Encrypt, and unlike certbot's manual DNS mode it renews unattended, since
   the DNS update is an API call rather than a hand-entered record.
 
+- Added API-key authentication for the public API (OR-29). Keys come from
+  `AUTH_API_KEYS`; the backend now refuses to start with authentication
+  disabled when `APP_ENV=production`, and warns loudly otherwise. Enforced as
+  one middleware rather than per-route dependencies, so a route added later
+  cannot silently skip it. WebSockets authenticate via `?token=`, since a
+  browser cannot set headers on the handshake.
+- Added a deployment capability ceiling for skills (OR-31), mirroring n8n's
+  `NODES_INCLUDE`/`NODES_EXCLUDE`. Enforced at `SkillRegistry.resolve`, the
+  point every path converges on — the Agents UI, `POST /config/import`, a DAG
+  definition, a marketplace package — rather than at the API edge. Lives in
+  config rather than the database on purpose: every run consumes untrusted web
+  content, so an agent talked into misbehaving must have no write path to the
+  thing restricting it. `PRODUCT_PROFILE=app` denies `workspace_exec`,
+  `workspace_write`, and `python_experiment` unless explicitly allowed.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host

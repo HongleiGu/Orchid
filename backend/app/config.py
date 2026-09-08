@@ -22,6 +22,26 @@ class Settings(BaseSettings):
     app_log_level: str = "INFO"
     app_cors_origins: str = "http://localhost:3000"  # comma-separated or JSON array
 
+    # ── Access control ────────────────────────────────────────────────────────
+    # These are the deployment capability ceiling and they live in config, not the
+    # database, on purpose: every run consumes untrusted web content, so an agent
+    # talked into misbehaving must have no write path to the thing restricting it.
+    # Per-user entitlements layer on top and may only narrow this, never widen it.
+    #
+    # "full" = unrestricted (default, unchanged behaviour).
+    # "app"  = locked-down run-only edition.
+    product_profile: Literal["full", "app"] = "full"
+
+    # Comma-separated API keys. Empty disables authentication, which is refused
+    # outright when app_env is production.
+    auth_api_keys: str = ""
+
+    # Skill capability ceiling, mirroring n8n's NODES_INCLUDE / NODES_EXCLUDE.
+    # allow empty  = no allowlist (subject to the denylist below)
+    # deny applies always, and wins over allow.
+    skills_allow: str = ""
+    skills_deny: str = ""
+
     # ── Infrastructure ────────────────────────────────────────────────────────
     database_url: str = "sqlite+aiosqlite:///./agentapp.db"
     redis_url: str = ""  # empty = in-process fallback
@@ -84,6 +104,42 @@ class Settings(BaseSettings):
         if v.startswith("["):
             return json.loads(v)
         return [o.strip() for o in v.split(",") if o.strip()]
+
+    # ── Access-control helpers ────────────────────────────────────────────────
+
+    @property
+    def api_keys(self) -> set[str]:
+        return {k.strip() for k in self.auth_api_keys.split(",") if k.strip()}
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(self.api_keys)
+
+    @property
+    def skills_allowlist(self) -> set[str]:
+        return {s.strip() for s in self.skills_allow.split(",") if s.strip()}
+
+    @property
+    def skills_denylist(self) -> set[str]:
+        """Explicit denies, plus the dangerous defaults when running locked down.
+
+        n8n blocks its Execute Command node out of the box for the same reason:
+        arbitrary command execution reachable from a workflow is not something a
+        run-only deployment should offer, and opting in should be deliberate.
+        """
+        deny = {s.strip() for s in self.skills_deny.split(",") if s.strip()}
+        if self.product_profile == "app":
+            deny |= DEFAULT_DENIED_SKILLS - self.skills_allowlist
+        return deny
+
+
+# Denied by default in the "app" profile. An explicit entry in SKILLS_ALLOW
+# overrides this, so a template that genuinely needs one can opt in.
+DEFAULT_DENIED_SKILLS: set[str] = {
+    "@orchid/workspace_exec",
+    "@orchid/workspace_write",
+    "@orchid/python_experiment",
+}
 
 
 @lru_cache
