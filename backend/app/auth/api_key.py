@@ -106,6 +106,53 @@ async def authenticate(candidate: str | None) -> tuple[bool, str | None]:
     return (user is not None), (user.id if user else None)
 
 
+# Whether authentication is being enforced. Not simply `settings.auth_enabled`:
+# that reports only static keys, so a deployment which has migrated entirely to
+# issued keys (OR-37) would report "no keys configured" and skip the middleware
+# altogether — serving the whole API anonymously while startup logged that
+# authentication was enabled. Latched on, never off: if every key is later
+# revoked, requests are refused rather than admitted.
+_db_keys_seen = False
+_last_db_probe = 0.0
+# How long a deployment with no credentials at all may go before noticing that
+# its first key has been issued. Only paid while there are none, so this is not
+# a per-request cost in any configured deployment.
+_DB_PROBE_INTERVAL_SECONDS = 30.0
+
+
+async def auth_is_enforced() -> bool:
+    """Whether any credential source exists, so requests must be authenticated.
+
+    Static keys answer this for free. Otherwise the database is probed, at most
+    every 30 seconds, until a key is found — after which the answer is latched.
+    That also means issuing the very first key switches authentication on
+    without a restart, which is the behaviour OR-37 wanted for revocation.
+    """
+    global _db_keys_seen, _last_db_probe
+
+    if get_settings().api_keys or _db_keys_seen:
+        return True
+
+    from time import monotonic
+
+    now = monotonic()
+    if _last_db_probe and now - _last_db_probe < _DB_PROBE_INTERVAL_SECONDS:
+        return False
+
+    _last_db_probe = now
+    if await _has_active_db_key():
+        _db_keys_seen = True
+        logger.info("Database API key found — authentication is now enforced")
+    return _db_keys_seen
+
+
+def reset_auth_state() -> None:
+    """Forget the latched state. For tests; nothing in the app calls it."""
+    global _db_keys_seen, _last_db_probe
+    _db_keys_seen = False
+    _last_db_probe = 0.0
+
+
 async def _has_active_db_key() -> bool:
     """Whether any usable database key exists. Never raises."""
     try:
@@ -146,7 +193,7 @@ async def verify_startup_configuration() -> None:
         )
         return
 
-    if await _has_active_db_key():
+    if await auth_is_enforced():
         logger.info(
             "API authentication enabled (database keys, profile=%s)",
             settings.product_profile,

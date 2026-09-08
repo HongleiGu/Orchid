@@ -154,8 +154,39 @@ async def test_production_without_keys_refuses_to_start(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("AUTH_API_KEYS", "")
 
+    # Stubbed rather than left to whatever the developer's local database
+    # happens to contain: an issued key there is a legitimate second credential
+    # source, so without this the test passes or fails on ambient state.
+    async def _no_db_keys():
+        return False
+
+    api_key.reset_auth_state()
+    monkeypatch.setattr(api_key, "_has_active_db_key", _no_db_keys)
+
     with pytest.raises(RuntimeError, match="AUTH_API_KEYS"):
         await api_key.verify_startup_configuration()
+    api_key.reset_auth_state()
+
+
+async def test_production_with_only_issued_keys_starts(monkeypatch):
+    """A deployment that has migrated off static keys is properly configured,
+    and must not be told to set AUTH_API_KEYS."""
+    from app.auth import api_key
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("AUTH_API_KEYS", "")
+
+    async def _has_db_keys():
+        return True
+
+    api_key.reset_auth_state()
+    monkeypatch.setattr(api_key, "_has_active_db_key", _has_db_keys)
+    try:
+        await api_key.verify_startup_configuration()      # must not raise
+        assert await api_key.auth_is_enforced() is True
+    finally:
+        api_key.reset_auth_state()
 
 
 async def test_production_with_keys_starts(monkeypatch):

@@ -115,13 +115,15 @@ async def api_key_middleware(request: Request, call_next):
     OPTIONS is exempt because CORS preflight carries no credentials — the browser
     sends the real request, with the key, only once preflight succeeds.
     """
-    from app.auth.api_key import authenticate, extract_key, is_public_path
+    from app.auth.api_key import auth_is_enforced, authenticate, extract_key, is_public_path
 
-    if (
-        not get_settings().auth_enabled
-        or request.method == "OPTIONS"
-        or is_public_path(request.url.path)
-    ):
+    if request.method == "OPTIONS" or is_public_path(request.url.path):
+        return await call_next(request)
+
+    # Not settings.auth_enabled, which sees only static keys: a deployment
+    # holding nothing but issued keys would skip this check entirely and serve
+    # the API anonymously.
+    if not await auth_is_enforced():
         return await call_next(request)
 
     ok, user_id = await authenticate(extract_key(request))
@@ -150,7 +152,7 @@ async def product_profile_middleware(request: Request, call_next):
     an unauthenticated caller learns which paths exist — so authentication is
     verified here too before refusing on profile grounds.
     """
-    from app.auth.api_key import authenticate, extract_key, is_public_path
+    from app.auth.api_key import auth_is_enforced, authenticate, extract_key, is_public_path
     from app.auth.profile import is_request_permitted
 
     settings = get_settings()
@@ -162,7 +164,7 @@ async def product_profile_middleware(request: Request, call_next):
         return await call_next(request)
 
     authed, _ = await authenticate(extract_key(request))
-    if settings.auth_enabled and not authed:
+    if await auth_is_enforced() and not authed:
         return await call_next(request)   # let the auth middleware return 401
 
     if not is_request_permitted(request.method, request.url.path):
