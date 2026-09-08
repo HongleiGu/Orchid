@@ -48,6 +48,11 @@ async def lifespan(app: FastAPI):
     from app.templates.registry import load_templates
     load_templates()
 
+    #    Subscription tiers. Config, not database: a plan may only narrow the
+    #    deployment ceiling, never widen it.
+    from app.plans.registry import load_plans
+    load_plans()
+
     # 3. Start the run-event broker
     from app.ws.manager import ws_manager
     await ws_manager.startup()

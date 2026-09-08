@@ -136,6 +136,19 @@ async def run_template(
     if not template:
         raise HTTPException(404, f"Template not found: {template_id}")
 
+    # Layer 3 narrowing (OR-38). 403 rather than 404: the template exists and is
+    # listed in the catalog, so pretending otherwise would just be confusing.
+    from app.plans.service import permissions_for
+
+    user_id = getattr(request.state, "user_id", None)
+    perms = await permissions_for(db, user_id)
+    if not perms.allows_template(template_id):
+        raise HTTPException(
+            403,
+            f"Template {template_id!r} is not included in your plan"
+            + (f" ({perms.plan_id})" if perms.plan_id else ""),
+        )
+
     body = body or RunTemplateBody()
     inputs = _resolve_inputs(template, body.inputs)
     task = await _materialise(template, db)
@@ -162,7 +175,7 @@ async def run_template(
         task_id=task.id,
         agent_id=task.agent_id,
         # None when authenticated with a static key, which carries no identity.
-        user_id=getattr(request.state, "user_id", None),
+        user_id=user_id,
         status="pending",
         priority=priority,
         runtime_params=inputs,

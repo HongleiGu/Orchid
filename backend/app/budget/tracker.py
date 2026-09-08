@@ -75,8 +75,10 @@ async def check_budget(
             run = await db.get(Run, run_id)
             user_id = run.user_id if run else None
 
-        # Check limits in order: global → agent → task → user
+        # Check limits in order: global → agent → task → user, then the
+        # subscription plan's own caps.
         limits = await _get_applicable_limits(db, task_id, agent_id, user_id)
+        limits.extend(await _plan_limits(db, user_id))
 
         for limit in limits:
             # Per-run token limit
@@ -218,6 +220,31 @@ async def _get_run_totals(db: AsyncSession, run_id: str) -> dict:
         "tokens": (row[0] or 0) + (row[1] or 0),
         "cost": round(row[2] or 0, 6),
     }
+
+
+async def _plan_limits(db: AsyncSession, user_id: str | None) -> list[BudgetLimit]:
+    """The user's plan caps, as a transient BudgetLimit scoped to them.
+
+    Not persisted: the plan is config, so materialising rows would duplicate it
+    into the database and let the two drift. Building the object here keeps one
+    source of truth and reuses the existing limit-checking code unchanged.
+    """
+    if not user_id:
+        return []
+
+    from app.plans.service import permissions_for
+
+    perms = await permissions_for(db, user_id)
+    if perms.max_cost_per_day is None and perms.max_cost_per_month is None:
+        return []
+
+    return [BudgetLimit(
+        id=f"plan:{perms.plan_id}",
+        scope_type="user",
+        scope_id=user_id,
+        max_cost_per_day=perms.max_cost_per_day,
+        max_cost_per_month=perms.max_cost_per_month,
+    )]
 
 
 async def _get_applicable_limits(

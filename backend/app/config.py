@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # template cannot pin a model this deployment has not approved or paid for.
     models_allow: str = ""
 
+    # Whether a user must hold a subscription to do anything (OR-38).
+    # False keeps a deployment working when plans are introduced, and is right
+    # for a single-customer install where tiers are meaningless. True is what a
+    # paid multi-tenant service wants: no plan, no access.
+    plan_required: bool = False
+
     # ── Infrastructure ────────────────────────────────────────────────────────
     # Postgres only. SQLite was never really supported — there are no dialect
     # branches, alembic/env.py has no batch mode (so any ALTER/DROP migration

@@ -1,0 +1,27 @@
+{
+  "_comment": "Subscription tiers (OR-38). A plan may only NARROW the deployment ceiling set by SKILLS_ALLOW / SKILLS_DENY / MODELS_ALLOW — listing something the ceiling denies does not grant it. '*' means 'everything the ceiling allows'. Delete this file for a single-customer deployment where every user runs at the ceiling.",
+  "plans": [
+    {
+      "id": "trial",
+      "name": "试用版",
+      "description": "单个模板，每日额度很小，用于评估。",
+      "templates": ["china-market-daily-brief"],
+      "skills": ["*"],
+      "models": ["deepseek/deepseek-chat"],
+      "max_cost_per_day": 1.0,
+      "max_cost_per_month": 5.0,
+      "max_runs_per_day": 3
+    },
+    {
+      "id": "standard",
+      "name": "标准版",
+      "description": "全部模板，常规额度。",
+      "templates": ["*"],
+      "skills": ["*"],
+      "models": ["deepseek/deepseek-chat", "deepseek/deepseek-reasoner"],
+      "max_cost_per_day": 20.0,
+      "max_cost_per_month": 300.0,
+      "max_runs_per_day": 50
+    }
+  ]
+}
