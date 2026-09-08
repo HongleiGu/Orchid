@@ -44,6 +44,14 @@ _RULES: tuple[tuple[frozenset[str], re.Pattern[str]], ...] = (
 
     # Outputs.
     (frozenset({"GET"}), re.compile(r"^/api/v1/vault(/.*)?$")),
+
+    # Attestations (OR-40). The only write a run-only user may make, and not an
+    # exception to the rule: it appends a record of their own act, about
+    # themselves — the same category as cancelling their own run. A template
+    # gated on an attestation is unusable without it, since the design is that
+    # the user reads the text and agrees. The text stays read-only; it is config.
+    (frozenset({"GET"}), re.compile(r"^/api/v1/attestations/?$")),
+    (frozenset({"POST"}), re.compile(r"^/api/v1/attestations/[^/]+/(accept|withdraw)/?$")),
 )
 
 # /tasks is deliberately absent. It was allowed read-only while templates did

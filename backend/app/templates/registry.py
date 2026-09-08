@@ -46,6 +46,11 @@ class Template(BaseModel):
     description: str = ""
     category: str = "general"
     inputs: list[TemplateInput] = Field(default_factory=list)
+    # Capability requirements this template declares (OR-40), e.g.
+    # "attestation:securities_advisory". Returned to clients on purpose: a UI
+    # has to know why a template is locked and what would unlock it. Unmet
+    # requirements are enforced server-side at the run gate regardless.
+    requires: list[str] = Field(default_factory=list)
     # The implementation. Deliberately excluded from API responses — the
     # workflow is the product, and a run-only customer has no reason to receive
     # the prompts. See OR-35.
@@ -157,6 +162,7 @@ def load_templates(directory: Path | None = None) -> int:
                 description=spec.get("description", ""),
                 category=spec.get("category", "general"),
                 inputs=_derive_inputs(pipeline),
+                requires=spec.get("requires", []),
                 pipeline=pipeline,
             )
             template_registry.register(template)

@@ -149,6 +149,19 @@ async def run_template(
             + (f" ({perms.plan_id})" if perms.plan_id else ""),
         )
 
+    # Declared capability requirements (OR-40). Checked after the plan so the
+    # clearer refusal wins: "your tier excludes this" is more useful than "you
+    # have not signed something" for a template you could never run anyway.
+    from app.attestations.service import unmet_requirements
+
+    unmet = await unmet_requirements(db, user_id, template.requires)
+    if unmet:
+        raise HTTPException(
+            403,
+            f"This template requires {', '.join(unmet)}, which you have not "
+            f"accepted. See GET /api/v1/attestations.",
+        )
+
     body = body or RunTemplateBody()
     inputs = _resolve_inputs(template, body.inputs)
     task = await _materialise(template, db)
