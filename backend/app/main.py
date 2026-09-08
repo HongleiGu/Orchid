@@ -41,6 +41,11 @@ async def lifespan(app: FastAPI):
     bundled_count = register_bundled_skills()
     logger.info("Registered %d bundled skills", bundled_count)
 
+    #    Templates are the curated workflows a run-only edition offers. They
+    #    ship as files with the release, so there is no write surface.
+    from app.templates.registry import load_templates
+    load_templates()
+
     # 3. Start the run-event broker
     from app.ws.manager import ws_manager
     await ws_manager.startup()
@@ -195,7 +200,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 
-from app.api.v1 import agents, tasks, runs, providers, models as models_router, config, marketplace, budget, gmail, registry, skill_writer, workflow_maker, vault as vault_router  # noqa: E402
+from app.api.v1 import agents, tasks, runs, providers, models as models_router, config, marketplace, budget, gmail, registry, skill_writer, workflow_maker, templates as templates_router, vault as vault_router  # noqa: E402
 
 PREFIX = "/api/v1"
 app.include_router(agents.router, prefix=PREFIX)
@@ -210,6 +215,7 @@ app.include_router(gmail.router, prefix=PREFIX)
 app.include_router(registry.router, prefix=PREFIX)
 app.include_router(skill_writer.router, prefix=PREFIX)
 app.include_router(workflow_maker.router, prefix=PREFIX)
+app.include_router(templates_router.router, prefix=PREFIX)
 app.include_router(vault_router.router, prefix=PREFIX)
 
 

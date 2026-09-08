@@ -21,6 +21,11 @@ from typing import Iterable
 
 # (allowed methods, compiled path pattern). Anything unmatched is refused.
 _RULES: tuple[tuple[frozenset[str], re.Pattern[str]], ...] = (
+    # The catalog: what a run-only edition is for. Read-only, and responses
+    # never include the pipeline.
+    (frozenset({"GET"}), re.compile(r"^/api/v1/templates/?$")),
+    (frozenset({"GET"}), re.compile(r"^/api/v1/templates/[^/]+/?$")),
+
     # Runs: list, read, create, and the SSE stream.
     (frozenset({"GET"}), re.compile(r"^/api/v1/runs/?$")),
     (frozenset({"POST"}), re.compile(r"^/api/v1/runs/?$")),

@@ -120,6 +120,13 @@ or `orchid 0.1.x`.
   call — the point every model name funnels through, whether it came from an
   agent record, a DAG node override, or a task's runtime params.
 
+- Added the template catalog (OR-34): curated, runnable workflows exposed at
+  `GET /api/v1/templates`. Templates ship as files with the release, so there
+  is no create/update route and nothing for the run-only profile to block.
+  Inputs are derived from the pipeline's task `input_schema` rather than
+  restated, keeping one source of truth; the pipeline itself is excluded from
+  every response, since the workflow is the product.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host

@@ -1,0 +1,7 @@
+{
+  "id": "china-market-daily-brief",
+  "name": "中国市场每日简报",
+  "category": "finance",
+  "description": "三条并行采集线（中国宏观政策 / A股港股资金面 / 全球外部变量）汇入事实核验节点，逐一比对实时行情接口；策略师定调，选股给出可追溯的买卖建议，风控与合规复核后成稿。产出附信源层级与逐项核验记录。",
+  "pipeline_file": "examples/china-market-daily-brief.json"
+}
