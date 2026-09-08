@@ -111,6 +111,15 @@ or `orchid 0.1.x`.
   unrelated request, which reads like an application bug; the check names the
   actual problem and the command that fixes it. Advisory, never fatal.
 
+- Added the run-only API surface allowlist (OR-30). With `PRODUCT_PROFILE=app`
+  only runs, budget usage, vault reads and task listing are reachable;
+  everything else returns 403, including all of workflow-maker, skill-writer,
+  marketplace and config import. Deny-by-default rather than a denylist, so a
+  route added later is closed until someone opens it deliberately.
+- Added a model ceiling (OR-32) via `MODELS_ALLOW`, enforced before the LiteLLM
+  call — the point every model name funnels through, whether it came from an
+  agent record, a DAG node override, or a task's runtime params.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host

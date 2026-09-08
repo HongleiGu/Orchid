@@ -124,6 +124,42 @@ async def api_key_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def product_profile_middleware(request: Request, call_next):
+    """Refuse anything outside the allowlist when running the run-only profile.
+
+    Ordering note: middleware added later runs first, so this executes before
+    the auth check above. That is the wrong way round for information leakage —
+    an unauthenticated caller learns which paths exist — so authentication is
+    verified here too before refusing on profile grounds.
+    """
+    from app.auth.api_key import extract_key, is_public_path, key_is_valid
+    from app.auth.profile import is_request_permitted
+
+    settings = get_settings()
+    if (
+        settings.product_profile != "app"
+        or request.method == "OPTIONS"
+        or is_public_path(request.url.path)
+    ):
+        return await call_next(request)
+
+    if settings.auth_enabled and not key_is_valid(extract_key(request)):
+        return await call_next(request)   # let the auth middleware return 401
+
+    if not is_request_permitted(request.method, request.url.path):
+        return JSONResponse(
+            status_code=403,
+            content=ErrorResponse(
+                error=ErrorDetail(
+                    message="Not available in this edition"
+                )
+            ).model_dump(),
+        )
+
+    return await call_next(request)
+
+
 # ── Error handling ────────────────────────────────────────────────────────────
 
 @app.exception_handler(HTTPException)

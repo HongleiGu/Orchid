@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     skills_allow: str = ""
     skills_deny: str = ""
 
+    # Model ceiling. Empty = any model. Enforced before the LiteLLM call, so a
+    # template cannot pin a model this deployment has not approved or paid for.
+    models_allow: str = ""
+
     # ── Infrastructure ────────────────────────────────────────────────────────
     # Postgres only. SQLite was never really supported — there are no dialect
     # branches, alembic/env.py has no batch mode (so any ALTER/DROP migration
@@ -122,6 +126,10 @@ class Settings(BaseSettings):
     @property
     def skills_allowlist(self) -> set[str]:
         return {s.strip() for s in self.skills_allow.split(",") if s.strip()}
+
+    @property
+    def models_allowlist(self) -> set[str]:
+        return {m.strip() for m in self.models_allow.split(",") if m.strip()}
 
     @property
     def skills_denylist(self) -> set[str]:

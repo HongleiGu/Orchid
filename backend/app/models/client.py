@@ -75,6 +75,29 @@ class ModelResponse:
     output_tokens: int = 0
 
 
+class ModelNotPermitted(PermissionError):
+    """Raised when a model is outside this deployment's allowlist."""
+
+
+def ensure_model_permitted(model: str) -> None:
+    """Deployment model ceiling (OR-32).
+
+    Checked here rather than at agent creation because a model name reaches
+    LiteLLM from several directions — an agent record, a DAG node override, a
+    task's runtime params — and they all funnel through this call. An empty
+    allowlist means "no allowlist", so a missing env var cannot silently block
+    every model.
+    """
+    from app.config import get_settings
+
+    allow = get_settings().models_allowlist
+    if allow and model not in allow:
+        raise ModelNotPermitted(
+            f"Model not permitted by this deployment: {model!r}. "
+            f"Allowed: {', '.join(sorted(allow))}"
+        )
+
+
 class ModelClient:
     """Thin async wrapper around LiteLLM `acompletion`."""
 
@@ -104,6 +127,8 @@ class ModelClient:
             openai_messages.append({"role": "user", "content": user_message})
 
         tool_specs = [t.to_openai_spec() for t in tools] if tools else None
+
+        ensure_model_permitted(model)
 
         kwargs: dict = {"model": model, "messages": openai_messages}
         if tool_specs:
