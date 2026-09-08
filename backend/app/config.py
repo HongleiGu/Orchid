@@ -43,7 +43,11 @@ class Settings(BaseSettings):
     skills_deny: str = ""
 
     # ── Infrastructure ────────────────────────────────────────────────────────
-    database_url: str = "sqlite+aiosqlite:///./agentapp.db"
+    # Postgres only. SQLite was never really supported — there are no dialect
+    # branches, alembic/env.py has no batch mode (so any ALTER/DROP migration
+    # would fail on it), and nothing tested that path. Having the untested
+    # dialect as the default just produced confusing "no such column" errors.
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/agentapp"
     redis_url: str = ""  # empty = in-process fallback
 
     # ── LLM ───────────────────────────────────────────────────────────────────

@@ -99,6 +99,17 @@ or `orchid 0.1.x`.
   resuming live. The WebSocket had no equivalent — a dropped connection simply
   stopped updating.
 
+- Standardised on PostgreSQL and dropped SQLite. SQLite was never really
+  supported: there are no dialect branches anywhere, `alembic/env.py` has no
+  batch mode (so any ALTER/DROP migration would have failed on it), and no test
+  ever exercised it — yet it was the default, so a fresh clone ran on the one
+  untested dialect. Removes the batch-mode work, keeps dev matching prod, and
+  leaves pgvector available for the vault-retrieval epic.
+- Added a startup warning when the database schema is behind the migrations.
+  A stale database otherwise surfaces as `UndefinedColumn` deep inside an
+  unrelated request, which reads like an application bug; the check names the
+  actual problem and the command that fixes it. Advisory, never fatal.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host

@@ -32,6 +32,9 @@ async def lifespan(app: FastAPI):
     import app.db.models  # noqa: F401
     from app.db.session import engine  # imported here so it's available on shutdown
 
+    from app.db.schema_check import warn_if_schema_is_stale
+    await warn_if_schema_is_stale(engine)
+
     # 2. Register bundled skills as RemoteSkill proxies. Every executable the
     #    LLM can call lives in skill-runner; the backend only holds proxies.
     from app.skills.bundled_loader import register_bundled_skills
