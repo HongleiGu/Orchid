@@ -245,7 +245,15 @@ export const api = {
   },
 };
 
-export function wsUrl(runId: string): string {
-  const ws = (process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000");
-  return `${ws}/api/v1/runs/${runId}/stream`;
+/**
+ * Server-sent event stream for a run.
+ *
+ * Same origin as the rest of the API — no separate ws:// URL — because the run
+ * stream is SSE now. Pass the returned URL to an EventSource; on reconnect the
+ * browser resends Last-Event-ID automatically and the server replays whatever
+ * was missed from run_events.
+ */
+export function runStreamUrl(runId: string): string {
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  return `${base}/api/v1/runs/${runId}/stream`;
 }

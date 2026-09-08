@@ -234,7 +234,7 @@ async def _run_wrapper(task_id: str, run_id: str, runtime_params: dict | None = 
                 ts=event.ts,
             ))
             await db.commit()
-        # Broadcast to WebSocket subscribers
+        # Fan out to any live event-stream subscribers
         from app.ws.manager import ws_manager
         await ws_manager.broadcast(run_id, {
             "seq": event.seq,

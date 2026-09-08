@@ -88,6 +88,17 @@ or `orchid 0.1.x`.
   thing restricting it. `PRODUCT_PROFILE=app` denies `workspace_exec`,
   `workspace_write`, and `python_experiment` unless explicitly allowed.
 
+- Replaced the run WebSocket with server-sent events. The socket was strictly
+  server-to-client — it never called receive — so the bidirectional half was
+  unused, and the frontend never connected to it at all. SSE authenticates
+  with ordinary headers under the same middleware as every other route
+  (removing the `?token=` query parameter, which access logs would capture),
+  reconnects on its own, and needs no Upgrade plumbing in nginx.
+- Made the run stream resumable: a reconnecting client sends Last-Event-ID and
+  the server replays what it missed from the durable `run_events` table before
+  resuming live. The WebSocket had no equivalent — a dropped connection simply
+  stopped updating.
+
 ### Fixed
 - Bound the backend, frontend, PostgreSQL, and Redis published ports to
   127.0.0.1. They were published on all interfaces, which on a public host

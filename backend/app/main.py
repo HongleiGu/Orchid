@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
     bundled_count = register_bundled_skills()
     logger.info("Registered %d bundled skills", bundled_count)
 
-    # 3. Start WebSocket manager
+    # 3. Start the run-event broker
     from app.ws.manager import ws_manager
     await ws_manager.startup()
 

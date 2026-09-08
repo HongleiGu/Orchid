@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -201,29 +204,99 @@ async def cancel_run(run_id: str, db: AsyncSession = Depends(get_db)):
     return DataResponse(data=CancelOut(run_id=run_id, status=status))
 
 
-# ── WebSocket stream ──────────────────────────────────────────────────────────
+# ── Event stream (SSE) ────────────────────────────────────────────────────────
 
-@router.websocket("/{run_id}/stream")
-async def stream_run(run_id: str, ws: WebSocket, db: AsyncSession = Depends(get_db)):
-    from app.auth.api_key import check_ws_token
+# Comment frame sent when idle. Keeps proxies from closing the connection and
+# lets the server notice a client that has gone away.
+SSE_KEEPALIVE_SECONDS = 25
+
+
+def _sse(event_id: int | None, data: str) -> str:
+    prefix = f"id: {event_id}\n" if event_id is not None else ""
+    return f"{prefix}data: {data}\n\n"
+
+
+@router.get("/{run_id}/stream")
+async def stream_run(
+    run_id: str,
+    request: Request,
+    last_event_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Server-sent events for one run.
+
+    SSE rather than a WebSocket because the traffic is strictly server to
+    client: the socket never received anything, so the bidirectional half was
+    unused. In exchange this authenticates with ordinary headers (covered by
+    the same middleware as every other route, instead of a token in the query
+    string that would land in access logs), and reconnects on its own.
+
+    Resumable: a client reconnecting sends Last-Event-ID, and everything it
+    missed is replayed from the durable run_events table before live streaming
+    resumes. The WebSocket had no equivalent — a dropped connection simply
+    stopped updating.
+    """
     from app.ws.manager import ws_manager
-
-    # The HTTP middleware cannot cover this: browsers cannot set headers on a
-    # WebSocket handshake, so the key arrives as ?token= instead. Closing with
-    # 4401 before accept() means an unauthenticated client never gets a socket.
-    if not check_ws_token(ws.query_params.get("token")):
-        await ws.close(code=4401, reason="Missing or invalid API key")
-        return
 
     run = await db.get(Run, run_id)
     if not run:
-        await ws.close(code=4004, reason="Run not found")
-        return
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
 
-    await ws_manager.connect(run_id, ws)
-    try:
-        await ws_manager.listen(run_id, ws)
-    except WebSocketDisconnect:
-        pass
-    finally:
-        ws_manager.disconnect(run_id, ws)
+    # The browser sends the header; the query parameter is for curl and tests.
+    header_id = request.headers.get("last-event-id")
+    if header_id and header_id.isdigit():
+        last_event_id = int(header_id)
+    after_seq = last_event_id or 0
+
+    async def event_stream():
+        # Subscribe before replaying, or an event emitted between the two would
+        # be lost. Anything the replay already covered is filtered out below.
+        async with ws_manager.subscribe(run_id) as live:
+            replayed_through = after_seq
+            rows = await db.execute(
+                select(RunEvent)
+                .where(RunEvent.run_id == run_id, RunEvent.seq > after_seq)
+                .order_by(RunEvent.seq)
+            )
+            for ev in rows.scalars():
+                replayed_through = ev.seq
+                yield _sse(ev.seq, json.dumps({
+                    "type": ev.type,
+                    "agent": ev.agent,
+                    "span_id": ev.span_id,
+                    "parent_span_id": ev.parent_span_id,
+                    "payload": ev.payload,
+                    "seq": ev.seq,
+                }))
+
+            while True:
+                try:
+                    message = await asyncio.wait_for(
+                        live.get(), timeout=SSE_KEEPALIVE_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    # A comment frame: keeps proxies from closing an idle
+                    # connection, and surfaces a client that has gone away.
+                    yield ": keepalive\n\n"
+                    continue
+
+                seq = None
+                try:
+                    seq = json.loads(message).get("seq")
+                except (ValueError, AttributeError):
+                    pass
+                # Skip whatever the replay already delivered.
+                if isinstance(seq, int) and seq <= replayed_through:
+                    continue
+                yield _sse(seq, message)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # nginx buffers proxied responses by default, which would hold events
+            # until the buffer filled and defeat streaming entirely.
+            "X-Accel-Buffering": "no",
+        },
+    )

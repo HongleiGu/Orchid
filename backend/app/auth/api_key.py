@@ -32,8 +32,9 @@ def is_public_path(path: str) -> bool:
 def extract_key(request: Request) -> str | None:
     """Read the key from either header form.
 
-    WebSockets cannot set headers from a browser, so the stream endpoint also
-    accepts ?token=; see check_ws_token.
+    Headers only, deliberately: the run stream is SSE rather than a WebSocket,
+    so every route authenticates the same way and no credential travels in a
+    query string where access logs would capture it.
     """
     header = request.headers.get("x-api-key")
     if header:
@@ -55,13 +56,6 @@ def key_is_valid(candidate: str | None) -> bool:
     return any(
         hmac.compare_digest(candidate, known) for known in get_settings().api_keys
     )
-
-
-def check_ws_token(token: str | None) -> bool:
-    settings = get_settings()
-    if not settings.auth_enabled:
-        return True
-    return key_is_valid(token)
 
 
 def verify_startup_configuration() -> None:

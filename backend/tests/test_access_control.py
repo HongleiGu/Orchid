@@ -122,17 +122,29 @@ def test_key_validation(monkeypatch):
     assert not api_key.key_is_valid("correct")
 
 
-def test_ws_token_open_when_auth_disabled(monkeypatch):
+def test_credentials_are_read_from_headers_only(monkeypatch):
+    """The run stream is SSE, so nothing authenticates via the query string.
+
+    A token in a URL is captured by access logs and browser history; keeping
+    every route on headers means one auth path and no such exposure.
+    """
+    from types import SimpleNamespace
+
     from app.auth import api_key
 
     get_settings.cache_clear()
-    monkeypatch.setenv("AUTH_API_KEYS", "")
-    assert api_key.check_ws_token(None)
-
-    get_settings.cache_clear()
     monkeypatch.setenv("AUTH_API_KEYS", "k")
-    assert not api_key.check_ws_token(None)
-    assert api_key.check_ws_token("k")
+
+    from_query = SimpleNamespace(headers={}, query_params={"token": "k"})
+    assert api_key.extract_key(from_query) is None
+
+    assert api_key.extract_key(SimpleNamespace(headers={"x-api-key": "k"})) == "k"
+    assert api_key.extract_key(
+        SimpleNamespace(headers={"authorization": "Bearer k"})
+    ) == "k"
+
+    # The WebSocket-only escape hatch is gone.
+    assert not hasattr(api_key, "check_ws_token")
 
 
 def test_production_without_keys_refuses_to_start(monkeypatch):
