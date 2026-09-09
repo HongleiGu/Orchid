@@ -95,14 +95,50 @@ skills; fatal for §12.
 
 ## 1. Deploy and migrate
 
-- [ ] `git pull` on the server, branch `aliyun`, expect `80ef61e` or later
-- [ ] `docker compose build backend` completes (CN mirror chain: aliyun → tsinghua → upstream)
-- [ ] `docker compose up -d` — all containers healthy
-- [ ] Migrations reach head. There are **three new ones** since the last deploy:
-      `0005_subscriptions`, `0006_user_attestations`, `0007_token_usage_span`
+- [ ] `git pull` on the server, branch `aliyun`, expect `34ea00a` or later
+
+- [ ] **Back up before migrating.** Three additive migrations, but do it anyway:
       ```bash
-      docker compose exec backend alembic current    # expect 0007_token_usage_span
+      docker compose exec -T postgres pg_dump -U postgres agentapp \
+        | gzip > ~/agentapp-$(date +%F).sql.gz
       ```
+
+- [ ] See where the database actually is:
+      ```bash
+      docker compose exec backend alembic current
+      ```
+
+- [ ] Migrate and load the new code:
+      ```bash
+      docker compose exec backend alembic upgrade head   # watch it apply
+      docker compose restart backend                     # load the new code
+      docker compose logs --tail=40 backend
+      ```
+
+      > ⚠️ **`docker compose up -d` is not enough.** The backend bind-mounts
+      > `./backend`, `./alembic` and `./alembic.ini`, so a `git pull` changes the
+      > files inside the running container without restarting anything — and
+      > compose only recreates a container when its *configuration* changes, so
+      > `up -d` will often print `Running` and do nothing. uvicorn runs without
+      > `--reload`, so the old code stays loaded. Restart explicitly.
+
+      > A rebuild is **not** needed for these commits — `backend/requirements.txt`
+      > has not changed since the Postgres refactor. Only rebuild if your image
+      > predates that.
+
+- [ ] Migrations reached head — expect `0007_token_usage_span`:
+      ```bash
+      docker compose exec backend alembic current
+      ```
+      The three new ones are `0005_subscriptions`, `0006_user_attestations`,
+      `0007_token_usage_span`. All additive: two new tables, one nullable column
+      and an index. The only lock worth knowing about is the `CREATE INDEX` on
+      `token_usage`, which blocks writes to that table while it builds — brief
+      unless the table is large (`SELECT count(*) FROM token_usage;`).
+
+      To roll back: `alembic downgrade 0004_user_attribution`. That **drops**
+      `subscriptions` and `user_attestations`, so anything recorded in them is
+      gone — fine right after deploying, not later.
 - [ ] Startup log says which credential source is active — one of
       `API authentication enabled (N static key(s), …)` or `(database keys, …)`
 - [ ] `curl -s $BASE/health` → `{"status":"ok"}` **without** a key
