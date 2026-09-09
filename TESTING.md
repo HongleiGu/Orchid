@@ -132,7 +132,7 @@ And these must still work:
       ```
 - [ ] Bump `version` in `backend/app/attestations/catalog/attestations.json`,
       restart → the old acceptance goes stale and the template locks again
-- [ ] Edit the text **without** bumting the version → also stale, and the log
+- [ ] Edit the text **without** bumping the version → also stale, and the log
       carries an error telling you to bump it
 
 ⚠️ **The shipped Chinese wording is a placeholder.** It is the text a regulator
