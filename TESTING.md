@@ -1,6 +1,6 @@
 # End-to-end acceptance: locked-down run-only edition (epic OR-28)
 
-Everything in OR-29 … OR-42 is merged on `aliyun`. Nothing below has been run on
+Everything in OR-29 … OR-42 is merged on `main`. Nothing below has been run on
 the server — it was verified on the dev machine against a local Postgres, which
 is not the same thing. This is the list to work through on the real box.
 
@@ -59,11 +59,13 @@ is *different* locally, so a difference does not read as a failure.
 - **Auth latches on.** Once the process has seen a database key it enforces for
   its whole lifetime. Revoking every key does *not* reopen the API until you
   restart — deliberate, it fails closed. Don't read it as a stuck cache.
-- **Every `.env` change needs a restart.** Settings are cached at import, so
-  flipping `PRODUCT_PROFILE`, `PLAN_REQUIRED`, `SKILLS_ALLOW` etc. does nothing
-  until the backend restarts — even under `--reload`.
-- **`PRODUCT_PROFILE=full` locally**, so §3 needs you to switch it to `app` and
-  restart, then switch back.
+- **Every `.env` change needs `docker compose up -d --force-recreate backend`,
+  not `restart`.** A container's environment is fixed when it is *created*, so
+  `restart` reuses the old values and your edit silently does nothing. Settings
+  are also cached at import, so nothing reloads in place either. Confirm with
+  `docker compose exec backend printenv <VAR>` rather than trusting the file.
+- **`PRODUCT_PROFILE=full` locally**, so §3 needs you to switch it to `app`,
+  force-recreate, then switch back.
 - **No DeepSeek key here.** `LLM_DEFAULT_MODEL` is `openrouter/openai/gpt-4o-mini`.
   Anything in the catalog naming `deepseek/*` will fail locally unless you add
   a key or repoint the model.
@@ -95,7 +97,7 @@ skills; fatal for §12.
 
 ## 1. Deploy and migrate
 
-- [ ] `git pull` on the server, branch `aliyun`, expect `34ea00a` or later
+- [ ] `git pull` on the server, branch `main`, expect `3b2479b` or later
 
 - [ ] **Back up before migrating.** Three additive migrations, but do it anyway:
       ```bash
@@ -110,17 +112,33 @@ skills; fatal for §12.
 
 - [ ] Migrate and load the new code:
       ```bash
-      docker compose exec backend alembic upgrade head   # watch it apply
-      docker compose restart backend                     # load the new code
+      docker compose exec backend alembic upgrade head       # watch it apply
+      docker compose up -d --force-recreate backend          # new code AND new env
       docker compose logs --tail=40 backend
       ```
 
-      > ⚠️ **`docker compose up -d` is not enough.** The backend bind-mounts
-      > `./backend`, `./alembic` and `./alembic.ini`, so a `git pull` changes the
-      > files inside the running container without restarting anything — and
-      > compose only recreates a container when its *configuration* changes, so
-      > `up -d` will often print `Running` and do nothing. uvicorn runs without
-      > `--reload`, so the old code stays loaded. Restart explicitly.
+      > ⚠️ **Know which command does what — this costs an hour otherwise.**
+      >
+      > | changed | command |
+      > |---|---|
+      > | code (bind-mounted) | `docker compose restart backend` |
+      > | anything in `.env` | `docker compose up -d --force-recreate backend` |
+      > | `requirements.txt` | `docker compose build backend && docker compose up -d backend` |
+      >
+      > `restart` reuses the existing container, and a container's environment is
+      > fixed when it is **created** — so a variable added to `.env` never reaches
+      > the process, and you get a 401 with a key that looks perfectly correct.
+      > Verify with `docker compose exec backend printenv AUTH_API_KEYS` rather
+      > than trusting the file.
+      >
+      > Plain `up -d` is the other half of the trap: the backend bind-mounts
+      > `./backend`, `./alembic` and `./alembic.ini`, so a `git pull` changes
+      > files inside the running container while compose sees no configuration
+      > change and prints `Running` without doing anything. uvicorn runs without
+      > `--reload`, so the old code stays loaded.
+      >
+      > `--force-recreate` covers both and is the safe default here. You will
+      > need it again at every `PRODUCT_PROFILE` / `PLAN_REQUIRED` flip below.
 
       > A rebuild is **not** needed for these commits — `backend/requirements.txt`
       > has not changed since the Postgres refactor. Only rebuild if your image
