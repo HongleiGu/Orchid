@@ -40,3 +40,7 @@ backend/app/data/.gmail_tokens.json
 **/*.db
 **/__pycache__/
 **/*.pyc
+# Database dumps — never commit these (see TESTING.md appendix)
+*.sql.gz
+*.sql
+*.dump

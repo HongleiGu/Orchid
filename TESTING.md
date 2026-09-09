@@ -106,6 +106,20 @@ skills; fatal for §12.
 - [ ] Startup log says which credential source is active — one of
       `API authentication enabled (N static key(s), …)` or `(database keys, …)`
 - [ ] `curl -s $BASE/health` → `{"status":"ok"}` **without** a key
+- [ ] Seed a tester — user, key and subscription in one idempotent step:
+      ```bash
+      docker compose exec backend python scripts/seed_test_user.py \
+        --identifier server-tester --plan trial --base-url https://www.dotslash.cn
+      ```
+      Copy the two `TEST_*` lines it prints into the server's `.env`. Re-running
+      is safe: it reuses the user, the key and the subscription.
+
+> **Database *state* does not travel with `git pull`; schema does.** Migrations
+> ride along and the entrypoint runs `alembic upgrade head` before uvicorn
+> starts, so a pull genuinely does update the schema. Rows — users, keys,
+> subscriptions, acceptances — do not, which is what the seed script is for.
+> Do not try to solve this by committing Postgres's data directory: see the
+> note at the end of this file.
 
 > If `alembic current` is behind, the backend logs a stale-schema warning at
 > startup rather than failing. Check for it.
@@ -295,3 +309,42 @@ would read. Have counsel review it before this template is offered commercially.
 | Static-key exemption | bypasses plans, quotas and attestations by design (§0) |
 | `/spans` in `app` profile | denied deliberately; per-span cost is a full-profile feature |
 | Server verification | none of the above has run on the server — that is what this list is for |
+
+---
+
+## Appendix: moving database state between machines
+
+`git pull` brings **schema** — Alembic migrations are text, they are in the
+repo, and `backend/docker-entrypoint.sh` runs `alembic upgrade head` before
+uvicorn starts. That part genuinely works.
+
+It does not bring **rows**, and it should not be made to. Committing Postgres's
+data directory would mean:
+
+- **Binary files git cannot merge.** Two machines both writing rows produce a
+  conflict in a heap file with no resolution but "pick one".
+- **A torn snapshot.** Copying `PGDATA` out from under a running cluster is not
+  crash-consistent; what git captured might not start.
+- **Secrets in the repo, permanently.** That directory holds API key hashes and
+  user records, and git history keeps them after deletion.
+- **Permissions Postgres refuses to run without.** `PGDATA` must be `0700`, and
+  git does not record that — on Windows `core.filemode=false` means it cannot.
+- **Unbounded repo growth**, every WAL segment forever.
+
+Use instead, in order of preference:
+
+1. **`scripts/seed_test_user.py`** for the state a tester needs. Text,
+   reviewable, idempotent, works on any box.
+2. **`pg_dump` for real data movement**, kept out of git:
+   ```bash
+   docker compose exec -T postgres pg_dump -U postgres agentapp | gzip > backup.sql.gz
+   gunzip -c backup.sql.gz | docker compose exec -T postgres psql -U postgres agentapp
+   ```
+   `*.sql.gz` is not gitignored yet — add it before you create one in the repo
+   root. A 313MB tarball nearly went in once already.
+3. **A bind mount, if what you want is the data visible in the project folder**
+   rather than in a Docker volume — swap `postgres_data:/var/lib/postgresql/data`
+   for `./data/postgres:/var/lib/postgresql/data` and gitignore it. Fine on the
+   Linux server; expect `initdb` to fail on Windows, where Docker Desktop's
+   filesystem shim cannot give the directory the ownership Postgres demands.
+   This changes nothing about git — it only moves where the bytes live.
