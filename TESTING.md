@@ -4,13 +4,21 @@ Everything in OR-29 … OR-42 is merged on `aliyun`. Nothing below has been run 
 the server — it was verified on the dev machine against a local Postgres, which
 is not the same thing. This is the list to work through on the real box.
 
-Set these once per shell:
+Set these once per shell. `TEST_BASE_URL` and `TEST_API_KEY` live in `.env`
+(gitignored), so there is nothing to paste:
 
 ```bash
-BASE=https://www.dotslash.cn          # or http://127.0.0.1:8000 on the box
-KEY=<a key>                           # see §2
-H="Authorization: Bearer $KEY"        # X-API-Key: $KEY also works
+eval "$(grep -E '^TEST_(BASE_URL|API_KEY)=' .env | sed 's/^/export /')"
+BASE=$TEST_BASE_URL
+H="Authorization: Bearer $TEST_API_KEY"   # X-API-Key: $TEST_API_KEY also works
 ```
+
+Only those two lines are read, not the whole file — `.env` has values that
+would not survive `source`.
+
+The key already in `.env` belongs to DB user **`local-tester`**, on the **trial**
+plan. It is a per-user key, so the plan and attestation gates genuinely apply to
+it. Point `TEST_BASE_URL` at the server and swap the key when you move on.
 
 ---
 
@@ -26,6 +34,62 @@ allowed and you will think the gates are broken.** Issue a per-user key first.
 
 This is deliberate and documented, but it is also the sharpest edge in the
 design — flag it if you would rather it fail closed instead.
+
+---
+
+## 0b. Testing locally first — what differs
+
+Worth doing: §2–§8, §10 and §11 are all fully exercisable on this machine, and
+finding a bug here is cheaper than finding it on the box. What follows is what
+is *different* locally, so a difference does not read as a failure.
+
+**Cannot be tested locally at all** — do these on the server:
+
+- §9's *"through nginx"* line and all of §13. nginx locally would need a cert
+  for `dotslash.cn`. SSE buffering is precisely the class of bug that only
+  appears behind a proxy, so this is the one gap that matters.
+
+**Different, and will surprise you:**
+
+- **The local API is currently open.** `AUTH_API_KEYS` is empty *and* the local
+  DB has no other keys besides the one just issued — so before that key existed,
+  every endpoint answered anonymously. That is correct behaviour for localhost
+  (the backend warns loudly at startup), but it means §2's "no key → 401" only
+  holds now that `local-tester` has a key.
+- **Auth latches on.** Once the process has seen a database key it enforces for
+  its whole lifetime. Revoking every key does *not* reopen the API until you
+  restart — deliberate, it fails closed. Don't read it as a stuck cache.
+- **Every `.env` change needs a restart.** Settings are cached at import, so
+  flipping `PRODUCT_PROFILE`, `PLAN_REQUIRED`, `SKILLS_ALLOW` etc. does nothing
+  until the backend restarts — even under `--reload`.
+- **`PRODUCT_PROFILE=full` locally**, so §3 needs you to switch it to `app` and
+  restart, then switch back.
+- **No DeepSeek key here.** `LLM_DEFAULT_MODEL` is `openrouter/openai/gpt-4o-mini`.
+  Anything in the catalog naming `deepseek/*` will fail locally unless you add
+  a key or repoint the model.
+- **CORS is set for port 3000 but `FRONTEND_PORT=4000`.** If you test from the
+  browser rather than curl, the browser will block it. Either set
+  `APP_CORS_ORIGINS=http://localhost:4000` or run the frontend on 3000.
+- **`REDIS_URL` is empty** → in-process pub/sub. Fine for one backend, but it
+  means the local setup does not exercise the multi-worker path the server may
+  eventually use.
+- **Old runs in the local DB predate `span_id`**, so they show all cost as
+  unattributed. Expected (§11), not a regression.
+
+**Windows, specifically:**
+
+- Use **Git Bash**, not PowerShell. In PowerShell `curl` is an alias for
+  `Invoke-WebRequest`, which does not understand `-H`, `-N` or `-o /dev/null`
+  and will fail confusingly. If you must use PowerShell, call `curl.exe`.
+- SSE (§9) needs `curl.exe -N`; `Invoke-WebRequest` buffers the whole response
+  and you will see nothing until the run ends.
+
+**Run the stack with `docker compose up -d`**, not bare uvicorn on the host.
+Every bundled skill is a proxy that forwards to `http://skill-runner:9000`, and
+that URL is a hardcoded constant in `backend/app/marketplace/proxy.py` — there
+is no env var to repoint it. Off the compose network the hostname does not
+resolve and every skill call fails. Fine for §2–§8 and §11, which touch no
+skills; fatal for §12.
 
 ---
 
@@ -147,8 +211,16 @@ would read. Have counsel review it before this template is offered commercially.
 - [ ] `… subscribe alice standard` → all templates allowed (latest row wins)
 - [ ] `… cancel alice` → access **continues** to `period_end`; `--now` ends it
 - [ ] `PLAN_REQUIRED=true` + a user with no subscription → nothing runnable
-- [ ] A plan naming a skill that `SKILLS_ALLOW` omits does **not** grant it
-      (a plan may only narrow)
+- [ ] A plan naming a skill that `SKILLS_ALLOW` omits does **not** grant it —
+      `plans.cli show alice` proves the narrowing, but see the caveat below
+
+> ⚠️ **A plan's `skills` and `models` lists are computed but not yet enforced.**
+> `permissions_for()` is consumed in exactly two places — the template gate and
+> the cost caps — so a plan can restrict *which templates* and *how much spend*,
+> and `plans.cli show` displays the correctly-narrowed skill and model sets, but
+> nothing checks them at skill-resolution or model-call time. The deployment
+> **ceiling** (`SKILLS_ALLOW` / `MODELS_ALLOW`) *is* enforced, in §4. Do not read
+> a passing §4 as proof that per-plan skill limits work — they do not exist yet.
 
 ## 8. Per-user attribution and quota (OR-39)
 
@@ -192,8 +264,10 @@ would read. Have counsel review it before this template is offered commercially.
 
 ## 12. A real run, start to finish
 
-- [ ] Run `china-market-daily-brief` against the live DeepSeek key with a real
-      watchlist
+- [ ] Run `china-market-daily-brief` with a real watchlist. **Locally this runs
+      on OpenRouter** (`LLM_DEFAULT_MODEL=openrouter/openai/gpt-4o-mini`); there
+      is no DeepSeek key in the local `.env`. Real money either way — keep the
+      watchlist short the first time.
 - [ ] Watch it over SSE from the browser through nginx
 - [ ] Output lands in the vault and is readable via `GET /api/v1/vault/...`
 - [ ] Cost is attributed per span and rolls up to a number that matches
@@ -217,6 +291,7 @@ would read. Have counsel review it before this template is offered commercially.
 | Attestation wording | placeholder, needs counsel before commercial use |
 | Per-span cost UI | nothing renders it; `useRunSpans` exists, no component consumes it |
 | Frontend types | stale — `Run` has no cost fields at all, though the API returns them |
+| Plan skill/model limits | computed and displayed, but not enforced anywhere (§7) |
 | Static-key exemption | bypasses plans, quotas and attestations by design (§0) |
 | `/spans` in `app` profile | denied deliberately; per-span cost is a full-profile feature |
 | Server verification | none of the above has run on the server — that is what this list is for |
