@@ -240,6 +240,23 @@ export interface SpanNode {
   started_at: string | null;
   finished_at: string | null;
   status: SpanStatus;
+
+  // What this span spent itself (OR-42). A node that only fans out to children
+  // spends nothing here.
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  llm_calls: number;
+
+  // ...and including everything beneath it.
+  subtree_cost_usd: number;
+  subtree_input_tokens: number;
+  subtree_output_tokens: number;
+  subtree_llm_calls: number;
+
+  // Fraction of the run's total spend, 0..1. Measured against everything the
+  // run cost, so sibling shares fall short of 1 by whatever carries no span.
+  subtree_share: number;
 }
 
 export interface Run {

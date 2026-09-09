@@ -22,6 +22,11 @@ class TokenUsage(Base):
     user_id: Mapped[str | None] = mapped_column(
         String(26), ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
+    # Which span spent this (OR-42). NULL means the call was made outside any
+    # span, or predates the column — reported as unattributed rather than
+    # silently folded into a node that did not spend it. No foreign key: spans
+    # are reconstructed from run_events and have no table.
+    span_id: Mapped[str | None] = mapped_column(String(26))
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

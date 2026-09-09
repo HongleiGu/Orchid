@@ -33,14 +33,24 @@ async def record_usage(
     model: str,
     input_tokens: int,
     output_tokens: int,
+    span_id: str | None = None,
 ) -> TokenUsage:
     """Record a single LLM call's token usage.
 
     The user is copied from the run rather than threaded through the agent
     loop, which does not know who started it. One indexed primary-key lookup
     per call, in a session this function already opens.
+
+    span_id defaults to the ambient span (OR-42). Read here rather than added
+    to every call site because the context variable is already how span
+    identity propagates — and because a call site added later would otherwise
+    silently record unattributed spend. Pass it explicitly to override.
     """
+    from app.core.span import current_span_id
     from app.db.models.run import Run
+
+    if span_id is None:
+        span_id = current_span_id.get()
 
     cost = estimate_cost(model, input_tokens, output_tokens)
     async with AsyncSessionLocal() as db:
@@ -54,6 +64,7 @@ async def record_usage(
             output_tokens=output_tokens,
             cost_usd=cost,
             user_id=user_id,
+            span_id=span_id,
         )
         db.add(usage)
         await db.commit()

@@ -47,6 +47,25 @@ class SpanNode(BaseModel):
     finished_at: datetime | None
     status: str         # "running" | "done" | "cancelled" | "failed"
 
+    # What this span spent itself (OR-42). A DAG node that only fans out to
+    # children spends nothing here, which is correct rather than missing.
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    llm_calls: int = 0
+
+    # ...and including everything beneath it. This is the number that answers
+    # "the verifier node is 60% of this run".
+    subtree_cost_usd: float = 0.0
+    subtree_input_tokens: int = 0
+    subtree_output_tokens: int = 0
+    subtree_llm_calls: int = 0
+
+    # Fraction of the run's total spend, 0..1. The denominator is everything
+    # the run cost, including spend carrying no span, so sibling shares never
+    # sum above 1 and the shortfall is exactly what is unattributed.
+    subtree_share: float = 0.0
+
 
 class CancelSpanOut(BaseModel):
     span_id: str
@@ -97,6 +116,11 @@ class RunDetail(RunOut):
     # Agent names are workflow internals, so this stays empty under the
     # run-only profile (OR-35). The total above is always available.
     cost_by_agent: list[AgentCost] = []
+    # Spend on this run that carries no span: calls made outside one, and every
+    # call recorded before OR-42 added the column. Surfaced rather than dropped
+    # so that per-span shares which do not add up to the run total have a
+    # visible explanation instead of looking like a rounding bug.
+    cost_unattributed_usd: float = 0.0
 
 
 class CancelOut(BaseModel):
@@ -133,6 +157,79 @@ async def _costs_for_runs(run_ids: list[str], db: AsyncSession) -> dict[str, Run
         )
         for run_id, cost, inp, outp, calls in rows.all()
     }
+
+
+async def _cost_by_span(run_id: str, db: AsyncSession) -> dict[str | None, RunCost]:
+    """Per-span totals for one run. The None key is spend carrying no span."""
+    rows = await db.execute(
+        select(
+            TokenUsage.span_id,
+            func.coalesce(func.sum(TokenUsage.cost_usd), 0.0),
+            func.coalesce(func.sum(TokenUsage.input_tokens), 0),
+            func.coalesce(func.sum(TokenUsage.output_tokens), 0),
+            func.count(),
+        )
+        .where(TokenUsage.run_id == run_id)
+        .group_by(TokenUsage.span_id)
+    )
+    return {
+        span_id: RunCost(
+            cost_usd=float(cost), input_tokens=int(inp),
+            output_tokens=int(outp), llm_calls=int(calls),
+        )
+        for span_id, cost, inp, outp, calls in rows.all()
+    }
+
+
+def _roll_up_cost(spans: dict[str, SpanNode], by_span: dict[str | None, RunCost]) -> None:
+    """Fill in each span's own cost, then accumulate it up the tree.
+
+    Walks children-to-parents so every node is summed exactly once. The visited
+    set is not paranoia about our own writer — parent_span_id comes from stored
+    event rows, and a cycle there would otherwise hang the request rather than
+    return a wrong number.
+    """
+    for span_id, node in spans.items():
+        own = by_span.get(span_id)
+        if own:
+            node.cost_usd = own.cost_usd
+            node.input_tokens = own.input_tokens
+            node.output_tokens = own.output_tokens
+            node.llm_calls = own.llm_calls
+        node.subtree_cost_usd = node.cost_usd
+        node.subtree_input_tokens = node.input_tokens
+        node.subtree_output_tokens = node.output_tokens
+        node.subtree_llm_calls = node.llm_calls
+
+    # Deepest first, so a node's children are complete before it is added to
+    # its own parent.
+    def depth(span_id: str) -> int:
+        seen: set[str] = set()
+        d = 0
+        cursor = spans[span_id].parent_span_id
+        while cursor in spans and cursor not in seen:
+            seen.add(cursor)
+            d += 1
+            cursor = spans[cursor].parent_span_id
+        return d
+
+    for span_id in sorted(spans, key=depth, reverse=True):
+        node = spans[span_id]
+        parent = spans.get(node.parent_span_id) if node.parent_span_id else None
+        if parent is None or parent is node:
+            continue
+        parent.subtree_cost_usd += node.subtree_cost_usd
+        parent.subtree_input_tokens += node.subtree_input_tokens
+        parent.subtree_output_tokens += node.subtree_output_tokens
+        parent.subtree_llm_calls += node.subtree_llm_calls
+
+    # Share is of everything the run cost, unattributed spend included, so the
+    # numbers a reader adds up are honest about what is missing.
+    total = sum(c.cost_usd for c in by_span.values())
+    for node in spans.values():
+        node.cost_usd = round(node.cost_usd, 6)
+        node.subtree_cost_usd = round(node.subtree_cost_usd, 6)
+        node.subtree_share = round(node.subtree_cost_usd / total, 4) if total else 0.0
 
 
 async def _cost_by_agent(run_id: str, db: AsyncSession) -> list[AgentCost]:
@@ -220,10 +317,15 @@ async def get_run(
         else await _cost_by_agent(run_id, db)
     )
 
+    # Not gated by profile: it names nothing about the workflow, and a total
+    # that cannot be reconciled with the per-span view is worse than the number.
+    unattributed = (await _cost_by_span(run_id, db)).get(None)
+
     detail = RunDetail(
         **RunOut.model_validate(run).model_dump(exclude={"cost"}),
         cost=costs.get(run_id, RunCost()),
         cost_by_agent=by_agent,
+        cost_unattributed_usd=round(unattributed.cost_usd, 6) if unattributed else 0.0,
         verbosity=level,
         events=[RunEventOut.model_validate(e) for e in events],
     )
@@ -283,6 +385,7 @@ async def list_spans(run_id: str, db: AsyncSession = Depends(get_db)):
             # Span never closed and no live task either — likely a crashed run.
             node.status = "failed"
 
+    _roll_up_cost(spans, await _cost_by_span(run_id, db))
     return DataResponse(data=list(spans.values()))
 
 
