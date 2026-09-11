@@ -18,7 +18,7 @@ set -u
 MIRRORS="${DOCKER_MIRRORS:-docker.m.daocloud.io docker.1ms.run docker.xuanyuan.me}"
 
 BUILD_IMAGES="library/python:3.11-slim library/node:20-alpine"
-RUNTIME_IMAGES="library/nginx:1.27-alpine library/postgres:16-alpine library/redis:7-alpine certbot/certbot:latest"
+RUNTIME_IMAGES="library/nginx:1.27-alpine library/postgres:16-alpine library/redis:7-alpine certbot/certbot:latest neilpang/acme.sh:latest"
 
 case "${1:-all}" in
   build)   IMAGES="$BUILD_IMAGES" ;;
