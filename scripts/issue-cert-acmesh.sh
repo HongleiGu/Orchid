@@ -38,6 +38,25 @@ set +a
 DOMAIN_ALT="${DOMAIN_ALT:-}"
 ACME_CA="${ACME_CA:-zerossl}"
 
+# DOMAIN is a bare hostname, not a URL. It becomes a certificate SAN, a
+# directory name, an openssl /CN= subject and nginx's server_name, and a scheme
+# breaks all four -- most confusingly as "Missing '=' after RDN type string"
+# from openssl, three steps in and nowhere near the actual mistake. Easy to get
+# wrong because NEXT_PUBLIC_API_URL and APP_CORS_ORIGINS *are* full URLs.
+for var in DOMAIN DOMAIN_ALT; do
+  eval "value=\${$var:-}"
+  case "$value" in
+    "") ;;
+    *://*|*/*|*:*)
+      hint="${value##*://}"; hint="${hint%%/*}"; hint="${hint%%:*}"
+      echo "ERROR: $var must be a bare hostname, not a URL." >&2
+      echo "       got:      $value" >&2
+      echo "       expected: $hint" >&2
+      exit 1
+      ;;
+  esac
+done
+
 DOMAIN_ARGS=(-d "$DOMAIN")
 [ -n "$DOMAIN_ALT" ] && DOMAIN_ARGS+=(-d "$DOMAIN_ALT")
 
