@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import DataResponse, PageMeta, PageResponse
 from app.api.verbosity import Verbosity, effective, filter_events, redact, visible
+from app.core.types import RunEventType
 from app.db.models.run import Run, RunEvent
 from app.db.models.usage import TokenUsage
 from app.config import get_settings
@@ -424,6 +425,22 @@ async def cancel_run(run_id: str, db: AsyncSession = Depends(get_db)):
 
 # ── Event stream (SSE) ────────────────────────────────────────────────────────
 
+def _run_has_ended(event_type: str | None, payload: dict) -> bool:
+    """Whether this event means the *run* is over, so the stream should close.
+
+    "terminated" is emitted from two places and only one of them ends the run:
+    the executor emits it with agent=None and a status, while a CollabGroup
+    emits it with the orchestrator's name and a reason/total_calls when its
+    own loop terminates. Closing on the latter would truncate the stream while
+    the run was still going, so the status key is the discriminator.
+    """
+    return (
+        event_type == RunEventType.TERMINATED.value
+        and isinstance(payload, dict)
+        and "status" in payload
+    )
+
+
 # Comment frame sent when idle. Keeps proxies from closing the connection and
 # lets the server notice a client that has gone away.
 SSE_KEEPALIVE_SECONDS = 25
@@ -473,7 +490,7 @@ async def stream_run(
         # Subscribe before replaying, or an event emitted between the two would
         # be lost. Anything the replay already covered is filtered out below.
         async with ws_manager.subscribe(run_id) as live:
-            replayed_through = after_seq
+            sent_through = after_seq
             rows = await db.execute(
                 select(RunEvent)
                 .where(RunEvent.run_id == run_id, RunEvent.seq > after_seq)
@@ -482,17 +499,20 @@ async def stream_run(
             for ev in rows.scalars():
                 # Advance the cursor even when an event is filtered out, or a
                 # reconnect would replay it forever.
-                replayed_through = ev.seq
-                if not visible(ev.type, ev.payload or {}, level):
-                    continue
-                yield _sse(ev.seq, json.dumps({
-                    "type": ev.type,
-                    "agent": ev.agent,
-                    "span_id": ev.span_id,
-                    "parent_span_id": ev.parent_span_id,
-                    "payload": redact(ev.type, ev.payload or {}, level),
-                    "seq": ev.seq,
-                }))
+                sent_through = ev.seq
+                if visible(ev.type, ev.payload or {}, level):
+                    yield _sse(ev.seq, json.dumps({
+                        "type": ev.type,
+                        "agent": ev.agent,
+                        "span_id": ev.span_id,
+                        "parent_span_id": ev.parent_span_id,
+                        "payload": redact(ev.type, ev.payload or {}, level),
+                        "seq": ev.seq,
+                    }))
+                # Streaming a run that has already finished must end, not sit
+                # there emitting keepalives at a client waiting for EOF.
+                if _run_has_ended(ev.type, ev.payload or {}):
+                    return
 
             while True:
                 try:
@@ -511,18 +531,27 @@ async def stream_run(
                     seq = event.get("seq")
                 except (ValueError, AttributeError):
                     event = None
-                # Skip whatever the replay already delivered.
-                if isinstance(seq, int) and seq <= replayed_through:
+                # Skip anything already delivered — by the replay, or by a
+                # redelivery from the broker. The watermark covers both.
+                if isinstance(seq, int) and seq <= sent_through:
                     continue
+                if isinstance(seq, int):
+                    sent_through = seq
 
+                ended = False
                 if isinstance(event, dict) and "type" in event:
                     etype, payload = event.get("type"), event.get("payload") or {}
+                    ended = _run_has_ended(etype, payload)
                     if not visible(etype, payload, level):
+                        if ended:
+                            return
                         continue
                     event["payload"] = redact(etype, payload, level)
                     message = json.dumps(event)
 
                 yield _sse(seq, message)
+                if ended:
+                    return
 
     return StreamingResponse(
         event_stream(),

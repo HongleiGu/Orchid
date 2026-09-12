@@ -59,10 +59,24 @@ class RunEventBroker:
 
     async def broadcast(self, run_id: str, data: dict) -> None:
         message = json.dumps(data)
+
+        # Exactly one delivery path per subscriber. Serving local queues
+        # directly *as well as* publishing would double every event, because
+        # this process is itself a Redis subscriber for the same channel and
+        # receives its own message back through subscribe()'s pump. That is
+        # invisible without Redis, which is why it survived local testing and
+        # only appeared on the deployed server.
         if self._redis:
-            await self._redis.publish(f"run:{run_id}", message)
-        # Local subscribers are served directly in both modes, so a single-worker
-        # deployment does not need a Redis round trip to see its own events.
+            try:
+                await self._redis.publish(f"run:{run_id}", message)
+                return
+            except Exception as exc:
+                # Fall through to local fan-out: a subscriber in this process
+                # still gets its events, rather than the stream going silent
+                # because the broker blipped.
+                logger.warning("Redis publish failed for run %s (%s) — "
+                               "delivering locally only", run_id, exc)
+
         for q in list(self._subscribers.get(run_id, ())):
             try:
                 q.put_nowait(message)

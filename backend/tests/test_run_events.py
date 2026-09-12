@@ -98,3 +98,119 @@ async def test_a_stalled_subscriber_does_not_break_broadcast(caplog):
 
 async def test_broadcast_with_no_subscribers_is_a_noop():
     await RunEventBroker().broadcast("nobody-listening", {"seq": 1})
+
+
+# ── Delivery paths (the duplicate-event bug) ─────────────────────────────────
+#
+# Found on the deployed server, not here: with REDIS_URL set, every event
+# arrived twice. broadcast() published to Redis *and* wrote to local queues,
+# while the publishing process is itself a Redis subscriber for that channel
+# and receives its own message back. Locally REDIS_URL is empty, only the
+# direct path runs, and the bug is invisible — so these tests fake the Redis
+# half rather than requiring a server.
+
+class _FakePubSub:
+    """Subscribes but never echoes anything back, so whatever lands in the
+    queue got there through the local path — which is exactly what these
+    tests are measuring."""
+
+    def __init__(self):
+        self.channels: list[str] = []
+
+    async def subscribe(self, channel):
+        self.channels.append(channel)
+
+    async def unsubscribe(self, channel):
+        pass
+
+    async def aclose(self):
+        pass
+
+    async def listen(self):
+        while True:
+            await asyncio.sleep(3600)
+            yield {}          # unreachable; makes this an async generator
+
+
+class _FakeRedis:
+    """Records publishes. Nothing pumps them back — the point is that the
+    local queue must NOT also be written to."""
+
+    def __init__(self, fail: bool = False):
+        self.published: list[tuple[str, str]] = []
+        self.fail = fail
+
+    def pubsub(self):
+        return _FakePubSub()
+
+    async def publish(self, channel, message):
+        if self.fail:
+            raise ConnectionError("redis is down")
+        self.published.append((channel, message))
+
+
+async def test_with_redis_the_local_queue_is_not_also_written():
+    """The regression. One delivery path per subscriber, or every event doubles."""
+    broker = RunEventBroker()
+    broker._redis = _FakeRedis()
+
+    async with broker.subscribe("run-1") as q:
+        await broker.broadcast("run-1", {"seq": 1, "type": "message"})
+
+        assert len(broker._redis.published) == 1
+        # The pump (not simulated here) is what delivers it. A message sitting
+        # in the queue as well would be the duplicate reaching the client.
+        assert q.empty(), "event was queued locally as well as published"
+
+
+async def test_without_redis_the_local_queue_is_the_delivery_path():
+    broker = RunEventBroker()
+    assert broker._redis is None
+
+    async with broker.subscribe("run-1") as q:
+        await broker.broadcast("run-1", {"seq": 1, "type": "message"})
+        assert json.loads(q.get_nowait())["seq"] == 1
+
+
+async def test_a_failed_publish_falls_back_to_local_delivery(caplog):
+    """A broker blip should degrade to same-process delivery, not silence."""
+    broker = RunEventBroker()
+    broker._redis = _FakeRedis(fail=True)
+
+    async with broker.subscribe("run-1") as q:
+        with caplog.at_level("WARNING"):
+            await broker.broadcast("run-1", {"seq": 7, "type": "message"})
+
+        assert json.loads(q.get_nowait())["seq"] == 7
+        assert "Redis publish failed" in caplog.text
+
+
+# ── Closing the stream (the endless-keepalive bug) ───────────────────────────
+#
+# The stream had no terminal condition: after the run's last event it sat
+# emitting keepalives forever, so a client reading to EOF never finished and
+# every completed run held a connection open.
+
+def test_a_finished_run_ends_the_stream():
+    from app.api.v1.runs import _run_has_ended
+
+    for status in ("done", "failed", "cancelled"):
+        assert _run_has_ended("terminated", {"status": status}) is True
+
+
+def test_a_collab_group_terminating_does_not_end_the_stream():
+    """"terminated" is emitted from two places. The executor ends the run;
+    a CollabGroup ending its own loop does not, and closing on that would
+    truncate the stream mid-run. The status key is the discriminator."""
+    from app.api.v1.runs import _run_has_ended
+
+    assert _run_has_ended("terminated", {"reason": "converged", "total_calls": 3}) is False
+    assert _run_has_ended("terminated", {}) is False
+
+
+def test_ordinary_events_do_not_end_the_stream():
+    from app.api.v1.runs import _run_has_ended
+
+    assert _run_has_ended("message", {"content": "hi"}) is False
+    assert _run_has_ended("agent_end", {"status": "done"}) is False
+    assert _run_has_ended(None, {"status": "done"}) is False
