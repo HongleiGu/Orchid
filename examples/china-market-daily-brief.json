@@ -126,24 +126,12 @@
           {
             "name": "plan",
             "agent_name": "cmb_planner",
-            "position": {
-              "x": 0,
-              "y": 0
-            },
+            "position": { "x": 0, "y": 0 },
             "contract": {
               "objective": "Ground the agenda in what actually moved today by pulling a live index and sector snapshot first.",
               "checks": [
-                {
-                  "type": "tool_called",
-                  "skill": "market_data"
-                },
-                {
-                  "type": "required_sections",
-                  "sections": [
-                    "市场初览",
-                    "三条检索线的任务书"
-                  ]
-                }
+                { "type": "tool_called", "skill": "market_data" },
+                { "type": "required_sections", "sections": ["市场初览", "三条检索线的任务书"] }
               ],
               "on_fail": "retry",
               "max_retries": 1
@@ -152,68 +140,30 @@
           {
             "name": "macro",
             "agent_name": "cmb_macro_policy",
-            "position": {
-              "x": 280,
-              "y": -220
-            }
+            "position": { "x": 280, "y": -220 }
           },
           {
             "name": "cn_market",
             "agent_name": "cmb_cn_market",
-            "position": {
-              "x": 280,
-              "y": 0
-            }
+            "position": { "x": 280, "y": 0 }
           },
           {
             "name": "global",
             "agent_name": "cmb_global",
-            "position": {
-              "x": 280,
-              "y": 220
-            }
+            "position": { "x": 280, "y": 220 }
           },
           {
             "name": "verify",
             "agent_name": "cmb_verifier",
-            "position": {
-              "x": 560,
-              "y": 0
-            },
+            "position": { "x": 560, "y": 0 },
             "contract": {
               "objective": "Every load-bearing number is re-checked against the live quote API and every claim is tagged by source level. Unsupported claims are struck, not softened.",
-              "requires": {
-                "artifacts": [
-                  "macro",
-                  "cn_market",
-                  "global"
-                ]
-              },
-              "produces": {
-                "sections": [
-                  "核验结果",
-                  "数值对账",
-                  "统一事实底稿"
-                ]
-              },
+              "requires": { "artifacts": ["macro", "cn_market", "global"] },
+              "produces": { "sections": ["核验结果", "数值对账", "统一事实底稿"] },
               "checks": [
-                {
-                  "type": "tool_called",
-                  "skill": "market_data"
-                },
-                {
-                  "type": "regex",
-                  "pattern": "^gate:\\s*(pass|needs_human_review)",
-                  "ignore_case": true
-                },
-                {
-                  "type": "required_sections",
-                  "sections": [
-                    "数值对账",
-                    "统一事实底稿",
-                    "数据时点"
-                  ]
-                }
+                { "type": "tool_called", "skill": "market_data" },
+                { "type": "regex", "pattern": "^gate:\\s*(pass|needs_human_review)", "ignore_case": true },
+                { "type": "required_sections", "sections": ["数值对账", "统一事实底稿", "数据时点"] }
               ],
               "on_fail": "retry",
               "on_blocked": "human_review",
@@ -223,48 +173,23 @@
           {
             "name": "strategy",
             "agent_name": "cmb_strategist",
-            "position": {
-              "x": 840,
-              "y": 0
-            }
+            "position": { "x": 840, "y": 0 }
           },
           {
             "name": "picks",
             "agent_name": "cmb_picker",
-            "position": {
-              "x": 1120,
-              "y": 0
-            },
+            "position": { "x": 1120, "y": 0 },
             "contract": {
               "objective": "Produce tradable, data-verified recommendations. Every instrument quoted must have been fetched with market_data in this run; anything unresolved is dropped rather than approximated.",
-              "requires": {
-                "artifacts": [
-                  "strategy"
-                ]
-              },
+              "requires": { "artifacts": ["strategy"] },
               "checks": [
-                {
-                  "type": "tool_called",
-                  "skill": "market_data"
-                },
+                { "type": "tool_called", "skill": "market_data" },
                 {
                   "type": "json_parse",
                   "field": "content",
-                  "required_keys": [
-                    "as_of",
-                    "horizon",
-                    "ideas",
-                    "verified_symbols",
-                    "unverified_dropped"
-                  ]
+                  "required_keys": ["as_of", "horizon", "ideas", "verified_symbols", "unverified_dropped"]
                 },
-                {
-                  "type": "required_sections",
-                  "sections": [
-                    "建议总览",
-                    "数据核验记录"
-                  ]
-                }
+                { "type": "required_sections", "sections": ["建议总览", "数据核验记录"] }
               ],
               "on_fail": "retry",
               "max_retries": 1
@@ -273,26 +198,17 @@
           {
             "name": "risk",
             "agent_name": "cmb_risk_critic",
-            "position": {
-              "x": 1400,
-              "y": 0
-            },
+            "position": { "x": 1400, "y": 0 },
             "contract": {
               "objective": "Decide APPROVE/REVISE on evidence. Never approve a list containing an unverified number or an untradable instrument.",
               "consensus": {
                 "n": 3,
-                "agree_on": [
-                  "verdict"
-                ],
+                "agree_on": ["verdict"],
                 "min_agree": 2,
                 "timeout_per_trajectory_s": 300
               },
               "checks": [
-                {
-                  "type": "regex",
-                  "pattern": "^verdict:\\s*(APPROVE|REVISE)",
-                  "ignore_case": true
-                }
+                { "type": "regex", "pattern": "^verdict:\\s*(APPROVE|REVISE)", "ignore_case": true }
               ],
               "on_fail": "retry",
               "max_retries": 1
@@ -301,42 +217,18 @@
           {
             "name": "revise",
             "agent_name": "cmb_reviser",
-            "position": {
-              "x": 1120,
-              "y": 240
-            }
+            "position": { "x": 1120, "y": 240 }
           },
           {
             "name": "compliance",
             "agent_name": "cmb_compliance",
-            "position": {
-              "x": 1680,
-              "y": -110
-            },
+            "position": { "x": 1680, "y": -110 },
             "contract": {
               "objective": "Localise the brief for mainland China: trading mechanics, investor-eligibility thresholds, cross-border access and costs, compliant wording, 北京时间 timestamps.",
-              "produces": {
-                "sections": [
-                  "修订记录",
-                  "准入与成本提示",
-                  "必须随文发布的声明"
-                ]
-              },
+              "produces": { "sections": ["修订记录", "准入与成本提示", "必须随文发布的声明"] },
               "checks": [
-                {
-                  "type": "required_sections",
-                  "sections": [
-                    "修订记录",
-                    "准入与成本提示",
-                    "合规后的建议清单",
-                    "必须随文发布的声明"
-                  ]
-                },
-                {
-                  "_comment": "positive check only — a not_contains guard on 保本/稳赚 would misfire on the 修订记录 table, which quotes the offending wording on purpose, and on the disclaimer phrase 不承诺保本",
-                  "type": "contains",
-                  "value": "不构成"
-                }
+                { "type": "required_sections", "sections": ["修订记录", "准入与成本提示", "合规后的建议清单", "必须随文发布的声明"] },
+                { "_comment": "positive check only — a not_contains guard on 保本/稳赚 would misfire on the 修订记录 table, which quotes the offending wording on purpose, and on the disclaimer phrase 不承诺保本", "type": "contains", "value": "不构成" }
               ],
               "on_fail": "retry",
               "max_retries": 1
@@ -345,37 +237,15 @@
           {
             "name": "publish",
             "agent_name": "cmb_publisher",
-            "position": {
-              "x": 1960,
-              "y": -110
-            },
+            "position": { "x": 1960, "y": -110 },
             "contract": {
               "_comment": "No consensus here on purpose: this node writes the long final report and calls vault_write, so n=3 would triple the most expensive node and write the file three times. Consensus sits on the risk gate instead, where the decision actually branches.",
               "objective": "Publish a complete, sourced, compliant Chinese brief to the vault, with an explicit data-and-sources section that includes coverage gaps.",
               "checks": [
-                {
-                  "type": "tool_called",
-                  "skill": "vault_write"
-                },
-                {
-                  "type": "regex",
-                  "pattern": "gate:\\s*(pass|needs_human_review)",
-                  "ignore_case": true
-                },
-                {
-                  "type": "required_sections",
-                  "sections": [
-                    "今日要点",
-                    "市场数据",
-                    "操作建议",
-                    "风险提示与免责声明",
-                    "数据与信源"
-                  ]
-                },
-                {
-                  "type": "contains",
-                  "value": "不构成"
-                }
+                { "type": "tool_called", "skill": "vault_write" },
+                { "type": "regex", "pattern": "gate:\\s*(pass|needs_human_review)", "ignore_case": true },
+                { "type": "required_sections", "sections": ["今日要点", "市场数据", "操作建议", "风险提示与免责声明", "数据与信源"] },
+                { "type": "contains", "value": "不构成" }
               ],
               "on_fail": "retry",
               "max_retries": 1
@@ -383,78 +253,31 @@
           }
         ],
         "edges": [
-          {
-            "source": "plan",
-            "target": "macro"
-          },
-          {
-            "source": "plan",
-            "target": "cn_market"
-          },
-          {
-            "source": "plan",
-            "target": "global"
-          },
-          {
-            "source": "macro",
-            "target": "verify"
-          },
-          {
-            "source": "cn_market",
-            "target": "verify"
-          },
-          {
-            "source": "global",
-            "target": "verify"
-          },
-          {
-            "source": "verify",
-            "target": "strategy"
-          },
-          {
-            "source": "strategy",
-            "target": "picks"
-          },
-          {
-            "source": "picks",
-            "target": "risk"
-          },
-          {
-            "source": "risk",
-            "target": "compliance",
-            "if": "'approve' in output.first_line"
-          },
-          {
-            "source": "risk",
-            "target": "revise",
-            "if": "'revise' in output.first_line"
-          },
+          { "source": "plan", "target": "macro" },
+          { "source": "plan", "target": "cn_market" },
+          { "source": "plan", "target": "global" },
+          { "source": "macro", "target": "verify" },
+          { "source": "cn_market", "target": "verify" },
+          { "source": "global", "target": "verify" },
+          { "source": "verify", "target": "strategy" },
+          { "source": "strategy", "target": "picks" },
+          { "source": "picks", "target": "risk" },
+          { "source": "risk", "target": "compliance", "if": "'approve' in output.first_line" },
+          { "source": "risk", "target": "revise", "if": "'revise' in output.first_line" },
           {
             "_comment": "bounded self-correction: the reviser sends the picker back to work at most twice",
             "source": "revise",
             "target": "picks",
             "max_iterations": 2
           },
-          {
-            "source": "compliance",
-            "target": "publish"
-          }
+          { "source": "compliance", "target": "publish" }
         ],
         "entry": "plan",
         "auto_save": true
       },
       "inputs": {
         "vault_project": "market-daily-brief",
-        "watchlist": [
-          "600519",
-          "000001.SZ",
-          "300750",
-          "688981",
-          "00700.HK",
-          "01810.HK",
-          "510300",
-          "159915"
-        ],
+        "watchlist": ["600519", "000001.SZ", "300750", "688981", "00700.HK", "01810.HK", "510300", "159915"],
         "horizon": "短线1-2周 + 中线1-3月",
         "risk_appetite": "中性偏稳健",
         "include_global": true,
@@ -467,16 +290,7 @@
           "type": "array",
           "label": "观察名单",
           "description": "股票/ETF代码。支持 600519、000001.SZ、00700.HK、AAPL、或中文名称。",
-          "default": [
-            "600519",
-            "000001.SZ",
-            "300750",
-            "688981",
-            "00700.HK",
-            "01810.HK",
-            "510300",
-            "159915"
-          ]
+          "default": ["600519", "000001.SZ", "300750", "688981", "00700.HK", "01810.HK", "510300", "159915"]
         },
         {
           "name": "horizon",
