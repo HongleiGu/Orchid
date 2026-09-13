@@ -48,3 +48,8 @@ services:
     build:
       args:
         NPM_REGISTRIES: *npm-regs
+
+  console:
+    build:
+      args:
+        NPM_REGISTRIES: *npm-regs

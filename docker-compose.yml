@@ -95,6 +95,18 @@ services:
       - backend
     restart: unless-stopped
 
+  # ── Operator console (PWA) ───────────────────────────────────────────────────
+  # Static files behind nginx at /console/. No published port: it is only ever
+  # reached through the gateway, same-origin with the API, which is what its
+  # Content-Security-Policy relies on. Built from clients/, which also holds the
+  # client core a future desktop shell or the publisher app would reuse.
+  console:
+    build:
+      context: ./clients
+      args:
+        NPM_REGISTRIES: "${NPM_REGISTRIES:-https://registry.npmjs.org https://registry.npmmirror.com}"
+    restart: unless-stopped
+
   # ── nginx (TLS termination + reverse proxy) ──────────────────────────────────
   # Profile-gated: plain `docker compose up` for local dev never starts these.
   # On the server put COMPOSE_PROFILES=prod in .env, or pass --profile prod.

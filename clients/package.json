@@ -1,0 +1,16 @@
+{
+  "name": "orchid-clients",
+  "private": true,
+  "packageManager": "pnpm@10.34.5",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "dev:console": "pnpm --filter @orchid/console dev"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

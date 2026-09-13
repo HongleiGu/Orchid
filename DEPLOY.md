@@ -173,11 +173,30 @@ Two 401s and a 200 means the deploy is sound. Continue with
 
 ---
 
+## 6. The operator console
+
+`docker compose up -d` also builds the `console` service; the gateway serves it at
+**`https://<domain>/console/`**, same-origin with the API. The image build runs the
+client core's tests first, so a broken stream client fails the build rather than
+reaching the server.
+
+```bash
+docker compose build console          # after pulling client changes
+docker compose up -d console
+curl -sI https://www.dotslash.cn/console/ | grep -i content-security-policy
+```
+
+Open it on your phone, paste an issued key (not the static one), and install it
+to the home screen. Details and design notes: [clients/README.md](clients/README.md).
+
+Changing only the gateway templates needs `docker compose restart nginx`: the
+image renders `/etc/nginx/templates` each time the container starts.
+
 ## Things that will look broken but aren't
 
-- **The web UI 401s on everything.** `frontend/src/lib/api.ts` sends no
-  credentials at all — no `Authorization`, no cookie. Any deployment with
-  authentication enabled has a dark UI until the new UI ships with real login.
+- **The Next.js web UI at `/` 401s on everything.** `frontend/src/lib/api.ts`
+  sends no credentials at all. Use the console at `/console/` instead, which
+  authenticates with an issued key.
   Do **not** work around it by putting a key in `NEXT_PUBLIC_*`: that value
   ships inside the client bundle, readable by anyone, and a static key bypasses
   plans, quotas and attestations.

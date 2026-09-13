@@ -82,6 +82,21 @@ server {
         proxy_buffering off;
     }
 
+    # Operator console (PWA), served by the console container. Variable
+    # proxy_pass for the same reason as above: resolved per request, so nginx
+    # still starts — and the rest of the site still works — if the console
+    # container is absent. The console sets its own CSP and cache headers.
+    location = /console {
+        return 301 /console/;
+    }
+    location /console/ {
+        set $upstream_console http://console:80;
+        proxy_pass $upstream_console;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     location = /health {
         set $upstream_health http://backend:8000;
         proxy_pass $upstream_health;
