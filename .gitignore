@@ -23,8 +23,9 @@ nginx/acme/
 *.tar
 
 # Vault content (user data)
-vault/
-!vault/.orchid/
+# Content vault (top-level only; not the app.vault code package)
+/vault/
+!/vault/.orchid/
 
 # Node
 node_modules/

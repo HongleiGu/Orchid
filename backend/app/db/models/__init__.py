@@ -8,6 +8,7 @@ from app.db.models.subscription import Subscription
 from app.db.models.task import Task
 from app.db.models.usage import BudgetLimit, TokenUsage
 from app.db.models.user import ApiKey, User
+from app.db.models.vault_owner import VaultOwner
 
 __all__ = ["Agent", "ApiKey", "BudgetLimit", "InstalledPackage", "KVStore", "PairingCode", "Task",
-           "Run", "RunEvent", "Subscription", "TokenUsage", "User", "UserAttestation"]
+           "Run", "RunEvent", "Subscription", "TokenUsage", "User", "UserAttestation", "VaultOwner"]

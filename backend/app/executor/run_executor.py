@@ -212,7 +212,14 @@ async def _run_wrapper(task_id: str, run_id: str, runtime_params: dict | None = 
 
         run.status = "running"
         run.started_at = datetime.now(timezone.utc)
+        run_user_id = run.user_id
         await db.commit()
+
+    # The run's user, for vault writes that cross into the skill-runner and
+    # come back through the RemoteSkill proxy (OR-48). Same contextvar pattern
+    # as the span id above; DAG node tasks inherit it at creation.
+    from app.vault.ownership import current_run_user
+    current_run_user.set(run_user_id)
 
     seq_counter = _SeqCounter()
 
@@ -279,6 +286,10 @@ async def _run_wrapper(task_id: str, run_id: str, runtime_params: dict | None = 
                 and cfg.get("auto_save", True)
             ):
                 _auto_save_to_vault(task_obj.name, run_id, output.content)
+                # Attribute the auto-saved project to whoever started the run.
+                from app.vault.ownership import claim, sanitize_autosave_project
+                await claim(db, sanitize_autosave_project(task_obj.name), run.user_id)
+                await db.commit()
         await emit(RunEventData(
             run_id=run_id, seq=0, type=RunEventType.TERMINATED,
             agent=None, payload={"status": "done"},

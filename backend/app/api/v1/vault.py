@@ -18,11 +18,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.api.schemas import DataResponse
+from app.vault import ownership
 
 router = APIRouter(prefix="/vault", tags=["vault"])
 
@@ -124,6 +125,25 @@ def _file(project: str, filename: str) -> Path:
     return path
 
 
+# ── ownership (OR-48) ─────────────────────────────────────────────────────────
+#
+# A request with no user identity — an operator's static key, or a deployment
+# with auth disabled — sees everything: nothing to scope to. An identified user
+# sees only the projects they own; a project they do not own is reported as 404,
+# not 403, so the surface does not confirm that another user's project exists.
+
+def _viewer(request: Request) -> str | None:
+    return getattr(request.state, "user_id", None)
+
+
+async def _require_access(request: Request, project: str) -> None:
+    viewer = _viewer(request)
+    if viewer is None:
+        return
+    if not await ownership.can_view(project, viewer):
+        raise HTTPException(404, f"Project '{project}' not found")
+
+
 def _entries(project_dir: Path) -> list[Path]:
     """Browsable files in a project: regular, visible, not symlinks."""
     return [
@@ -152,14 +172,19 @@ def _is_text(path: Path) -> bool:
 # ── routes ───────────────────────────────────────────────────────────────────
 
 @router.get("/projects", response_model=DataResponse[list[ProjectInfo]])
-async def list_projects():
+async def list_projects(request: Request):
     root = _vault_root()
     if not root.exists():
         return DataResponse(data=[])
 
+    viewer = _viewer(request)
+    owned = None if viewer is None else await ownership.owned_projects_for(viewer)
+
     projects = []
     for d in sorted(root.iterdir()):
         if not d.is_dir() or d.name.startswith(".") or d.is_symlink():
+            continue
+        if owned is not None and d.name not in owned:
             continue
         files = _entries(d)
         latest = max((f.stat().st_mtime for f in files), default=None)
@@ -173,7 +198,8 @@ async def list_projects():
 
 
 @router.get("/projects/{project}", response_model=DataResponse[list[FileInfo]])
-async def list_files(project: str):
+async def list_files(project: str, request: Request):
+    await _require_access(request, project)
     project_dir = _project_dir(project)
     files = sorted(_entries(project_dir), key=lambda p: p.stat().st_mtime, reverse=True)
     return DataResponse(data=[
@@ -190,7 +216,8 @@ async def list_files(project: str):
 
 
 @router.get("/projects/{project}/{filename}", response_model=DataResponse[FileContent])
-async def read_file(project: str, filename: str):
+async def read_file(project: str, filename: str, request: Request):
+    await _require_access(request, project)
     path = _file(project, filename)
     if not _is_text(path):
         raise HTTPException(415, f"{filename} is not a text file — download it instead")
@@ -210,7 +237,8 @@ async def read_file(project: str, filename: str):
 
 
 @router.get("/projects/{project}/{filename}/download")
-async def download_file(project: str, filename: str):
+async def download_file(project: str, filename: str, request: Request):
+    await _require_access(request, project)
     path = _file(project, filename)
     # RFC 6266 / 5987: the plain filename= form is ASCII-only, and report names
     # are often Chinese. filename* carries the real name; the ASCII fallback is
@@ -232,5 +260,6 @@ async def download_file(project: str, filename: str):
 
 
 @router.delete("/projects/{project}/{filename}", status_code=204)
-async def delete_file(project: str, filename: str):
+async def delete_file(project: str, filename: str, request: Request):
+    await _require_access(request, project)
     _file(project, filename).unlink()

@@ -44,6 +44,10 @@ class RemoteSkill(Skill):
             return _format_error(envelope)
         if data.get("error"):
             return _format_error(data["error"])
+        # Attribute a vault write to the current run's user (OR-48). Best-effort;
+        # never fail a skill that already succeeded.
+        from app.vault.ownership import note_vault_write
+        await note_vault_write(self.name, kwargs)
         return data.get("result", "")
 
 
