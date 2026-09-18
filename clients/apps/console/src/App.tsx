@@ -16,8 +16,12 @@ export function App() {
 
 function Root() {
   const { session, loading } = useSession();
+  const [segments] = useRoute();
   if (loading) return <main className="content"><Loading /></main>;
-  return session ? <Shell /> : <Connect />;
+  if (session) return <Shell />;
+  // A #/pair/<code> deep link (from a pairing QR) opens straight into redemption.
+  const presetCode = segments[0] === "pair" ? segments[1] : undefined;
+  return <Connect presetCode={presetCode} />;
 }
 
 function Shell() {

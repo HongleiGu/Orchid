@@ -138,3 +138,57 @@ export interface UsageSummary {
 export type Verbosity = "summary" | "info" | "debug";
 
 export const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
+
+// ── Vault (OR-46) ────────────────────────────────────────────────────────────
+
+export interface VaultProject {
+  name: string;
+  file_count: number;
+  total_size: number;
+  modified_at: string | null;
+}
+
+export interface VaultFile {
+  name: string;
+  project: string;
+  size: number;
+  modified_at: string;
+  media_type: string;
+  /** Whether readFile returns it inline. Binary files are download-only. */
+  is_text: boolean;
+}
+
+export interface VaultFileContent {
+  name: string;
+  project: string;
+  content: string;
+  size: number;
+  modified_at: string;
+  media_type: string;
+}
+
+// ── Device pairing (OR-47) ───────────────────────────────────────────────────
+
+export interface PairingCode {
+  id: string;
+  /** Formatted for display, e.g. "K9RX0-CFGP6". */
+  code: string;
+  expires_at: string;
+  ttl_seconds: number;
+}
+
+export type PairingState = "pending" | "redeemed" | "expired";
+
+export interface PairingStatus {
+  id: string;
+  status: PairingState;
+  expires_at: string;
+  redeemed_at: string | null;
+  device_name: string | null;
+}
+
+export interface PairingRedemption {
+  api_key: string;
+  key_id: string;
+  identifier: string;
+}

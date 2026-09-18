@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { AddDevice } from "../AddDevice";
 import { modules } from "../modules";
 import { useSession } from "../session";
 import { Card } from "../ui";
@@ -33,6 +34,8 @@ export function Settings() {
         </dl>
         <button className="danger" onClick={() => disconnect()}>Disconnect and forget key</button>
       </Card>
+
+      <AddDevice />
 
       <Card title="Install">
         {standalone ? (

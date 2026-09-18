@@ -12,6 +12,7 @@ import { Overview } from "./screens/Overview";
 import { Runs } from "./screens/Runs";
 import { Settings } from "./screens/Settings";
 import { Templates } from "./screens/Templates";
+import { Vault } from "./screens/Vault";
 
 export interface ConsoleModule {
   id: string;
@@ -30,8 +31,10 @@ export const modules: ConsoleModule[] = [
     description: "Start curated workflows; handles required consent." },
   { id: "runs", title: "Runs", icon: "▶", nav: true, component: Runs,
     description: "Live progress, cancellation, cost by step." },
+  { id: "vault", title: "Vault", icon: "▦", nav: true, component: Vault,
+    description: "Browse, read and download what runs produced." },
   { id: "settings", title: "Settings", icon: "⚙", nav: true, component: Settings,
-    description: "Connection, install as an app." },
+    description: "Connection, devices, install as an app." },
 ];
 
 export const defaultModule = modules[0]!;

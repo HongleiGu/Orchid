@@ -52,6 +52,13 @@ _RULES: tuple[tuple[frozenset[str], re.Pattern[str]], ...] = (
     # the user reads the text and agrees. The text stays read-only; it is config.
     (frozenset({"GET"}), re.compile(r"^/api/v1/attestations/?$")),
     (frozenset({"POST"}), re.compile(r"^/api/v1/attestations/[^/]+/(accept|withdraw)/?$")),
+
+    # Device pairing (OR-47). Like accepting an attestation, this acts only on
+    # the caller's own account: it issues *them* a key for another device. It
+    # grants nothing the caller did not already have. Redemption itself is a
+    # public path, so it never reaches this allowlist.
+    (frozenset({"POST"}), re.compile(r"^/api/v1/pairing/?$")),
+    (frozenset({"GET"}), re.compile(r"^/api/v1/pairing/[^/]+/?$")),
 )
 
 # /tasks is deliberately absent. It was allowed read-only while templates did

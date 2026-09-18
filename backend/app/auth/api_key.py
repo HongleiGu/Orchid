@@ -20,9 +20,11 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 # Paths reachable without a key.
-#   /health   — container healthchecks run before any key is provisioned
+#   /health                  — container healthchecks run before any key exists
+#   /api/v1/pairing/redeem   — a device being paired has no key yet; the pairing
+#                              code is its credential (OR-47, app/auth/pairing.py)
 # Everything else, including the OpenAPI docs, requires one.
-PUBLIC_PATHS: frozenset[str] = frozenset({"/health"})
+PUBLIC_PATHS: frozenset[str] = frozenset({"/health", "/api/v1/pairing/redeem"})
 
 
 def is_public_path(path: str) -> bool:

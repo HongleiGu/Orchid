@@ -198,9 +198,12 @@ async def test_production_with_keys_starts(monkeypatch):
     await api_key.verify_startup_configuration()  # must not raise
 
 
-def test_health_is_the_only_public_path():
+def test_public_paths_are_health_and_pairing_redemption_only():
+    """Exact-set assertion: adding a public path must be a deliberate test change.
+    Pairing redemption is public because the device has no key yet (OR-47)."""
     from app.auth import api_key
 
+    assert api_key.PUBLIC_PATHS == frozenset({"/health", "/api/v1/pairing/redeem"})
     assert api_key.is_public_path("/health")
     assert not api_key.is_public_path("/api/v1/agents")
     assert not api_key.is_public_path("/docs")

@@ -4,14 +4,27 @@ import type {
   Attestation,
   DataResponse,
   PageResponse,
+  PairingCode,
+  PairingRedemption,
+  PairingStatus,
   Run,
   RunDetail,
   RunTemplateResult,
   SpanNode,
   Template,
   UsageSummary,
+  VaultFile,
+  VaultFileContent,
+  VaultProject,
   Verbosity,
 } from "./types";
+
+/** A file fetched with its credentials, ready to save or share. */
+export interface DownloadedFile {
+  blob: Blob;
+  filename: string;
+  mediaType: string;
+}
 
 export interface ClientConfig {
   /** Origin of the deployment, e.g. "https://www.dotslash.cn". No trailing path. */
@@ -185,5 +198,99 @@ export class OrchidClient {
 
   async usageSummary(days = 30): Promise<UsageSummary> {
     return (await this.request<DataResponse<UsageSummary>>("GET", `/api/v1/budget/usage?days=${days}`)).data;
+  }
+
+  // ── vault (OR-46) ────────────────────────────────────────────────────────────
+
+  async vaultProjects(): Promise<VaultProject[]> {
+    return (await this.request<DataResponse<VaultProject[]>>("GET", "/api/v1/vault/projects")).data;
+  }
+
+  async vaultFiles(project: string): Promise<VaultFile[]> {
+    return (await this.request<DataResponse<VaultFile[]>>(
+      "GET", `/api/v1/vault/projects/${encodeURIComponent(project)}`,
+    )).data;
+  }
+
+  async vaultFile(project: string, filename: string): Promise<VaultFileContent> {
+    return (await this.request<DataResponse<VaultFileContent>>(
+      "GET", `/api/v1/vault/projects/${encodeURIComponent(project)}/${encodeURIComponent(filename)}`,
+    )).data;
+  }
+
+  /**
+   * Fetch a file with its credentials as a blob. A plain <a download> cannot be
+   * used: it sends no Authorization header, so it would 401. The caller decides
+   * what to do with the blob — Web Share on a phone, an object URL on desktop.
+   */
+  async downloadVaultFile(project: string, filename: string): Promise<DownloadedFile> {
+    const path = `/api/v1/vault/projects/${encodeURIComponent(project)}/${encodeURIComponent(filename)}/download`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs * 6); // files are larger than JSON
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+        signal: controller.signal,
+        cache: "no-store",
+      });
+    } catch (error) {
+      throw new NetworkError(`Could not download ${filename}: ${String(error)}`, error);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!response.ok) {
+      throw errorForStatus(response.status, `Download failed (${response.status})`, null);
+    }
+    return {
+      blob: await response.blob(),
+      filename,
+      mediaType: response.headers.get("Content-Type") ?? "application/octet-stream",
+    };
+  }
+
+  // ── device pairing (OR-47) ───────────────────────────────────────────────────
+
+  /** Issue a code so another device can sign itself in. */
+  async createPairing(): Promise<PairingCode> {
+    return (await this.request<DataResponse<PairingCode>>("POST", "/api/v1/pairing")).data;
+  }
+
+  async pairingStatus(id: string): Promise<PairingStatus> {
+    return (await this.request<DataResponse<PairingStatus>>(
+      "GET", `/api/v1/pairing/${encodeURIComponent(id)}`,
+    )).data;
+  }
+
+  /**
+   * Redeem a code on a new device to obtain its own key. Static — no key yet —
+   * so it does not go through the authenticated `request` path.
+   */
+  static async redeemPairing(
+    baseUrl: string,
+    code: string,
+    deviceName: string,
+    fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+  ): Promise<PairingRedemption> {
+    const root = baseUrl.replace(/\/+$/, "");
+    let response: Response;
+    try {
+      response = await fetchImpl(`${root}/api/v1/pairing/redeem`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ code, device_name: deviceName }),
+        cache: "no-store",
+      });
+    } catch (error) {
+      throw new NetworkError(`Could not reach ${root}: ${String(error)}`, error);
+    }
+    const text = await response.text();
+    let parsed: unknown;
+    try { parsed = text ? JSON.parse(text) : undefined; } catch { parsed = undefined; }
+    if (!response.ok) {
+      const err = (parsed as { error?: { message?: string } } | undefined)?.error;
+      throw errorForStatus(response.status, err?.message ?? `Pairing failed (${response.status})`, null);
+    }
+    return (parsed as DataResponse<PairingRedemption>).data;
   }
 }

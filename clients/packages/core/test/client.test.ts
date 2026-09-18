@@ -80,3 +80,43 @@ describe("MemoryCredentialStore", () => {
     expect(await store.load()).toBeNull();
   });
 });
+
+// ── vault + pairing (OR-46/47) ───────────────────────────────────────────────
+
+describe("OrchidClient vault and pairing", () => {
+  it("downloads a file with the bearer header and reads the returned name/type", async () => {
+    const { impl, calls } = fakeFetch(() =>
+      new Response(new Blob([new Uint8Array([1, 2, 3])]), {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      }),
+    );
+    const client = new OrchidClient({ baseUrl: "https://x", apiKey: "orc_k", fetchImpl: impl });
+    const file = await client.downloadVaultFile("市场", "报告.pdf");
+
+    expect(calls[0]!.url).toBe("https://x/api/v1/vault/projects/%E5%B8%82%E5%9C%BA/%E6%8A%A5%E5%91%8A.pdf/download");
+    expect((calls[0]!.init.headers as Record<string, string>).Authorization).toBe("Bearer orc_k");
+    expect(file.mediaType).toBe("application/pdf");
+    expect(file.blob.size).toBe(3);
+  });
+
+  it("redeems a pairing code without a key, and surfaces the server's refusal", async () => {
+    const ok = fakeFetch(() => json(200, { data: { api_key: "orc_new", key_id: "01K", identifier: "alice" } }));
+    const redeemed = await OrchidClient.redeemPairing("https://x/", "abcde-fghjk", "phone", ok.impl);
+    expect(redeemed.api_key).toBe("orc_new");
+    expect(ok.calls[0]!.url).toBe("https://x/api/v1/pairing/redeem");
+    expect((ok.calls[0]!.init.headers as Record<string, string>).Authorization).toBeUndefined();
+    expect(JSON.parse(ok.calls[0]!.init.body as string)).toEqual({ code: "abcde-fghjk", device_name: "phone" });
+
+    const bad = fakeFetch(() => json(400, { error: { message: "That code is invalid or has expired." } }));
+    await expect(OrchidClient.redeemPairing("https://x", "zzzzz-zzzzz", "phone", bad.impl))
+      .rejects.toThrow("invalid or has expired");
+  });
+
+  it("polls pairing status", async () => {
+    const { impl, calls } = fakeFetch(() => json(200, { data: { id: "01K", status: "redeemed", expires_at: "", redeemed_at: null, device_name: "phone" } }));
+    const status = await new OrchidClient({ baseUrl: "https://x", apiKey: "k", fetchImpl: impl }).pairingStatus("01K");
+    expect(status.status).toBe("redeemed");
+    expect(calls[0]!.url).toBe("https://x/api/v1/pairing/01K");
+  });
+});

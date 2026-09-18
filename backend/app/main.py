@@ -221,7 +221,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 
-from app.api.v1 import agents, tasks, runs, providers, models as models_router, config, marketplace, budget, gmail, registry, skill_writer, workflow_maker, templates as templates_router, vault as vault_router, attestations as attestations_router  # noqa: E402
+from app.api.v1 import agents, tasks, runs, providers, models as models_router, config, marketplace, budget, gmail, registry, skill_writer, workflow_maker, templates as templates_router, vault as vault_router, attestations as attestations_router, pairing as pairing_router  # noqa: E402
 
 PREFIX = "/api/v1"
 app.include_router(agents.router, prefix=PREFIX)
@@ -239,6 +239,7 @@ app.include_router(workflow_maker.router, prefix=PREFIX)
 app.include_router(templates_router.router, prefix=PREFIX)
 app.include_router(vault_router.router, prefix=PREFIX)
 app.include_router(attestations_router.router, prefix=PREFIX)
+app.include_router(pairing_router.router, prefix=PREFIX)
 
 
 @app.get("/health")
