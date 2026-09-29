@@ -136,6 +136,24 @@ from day one.
    Clean, literature-grounded, and directly the report's thesis: *mechanical
    attribution beats judge-based attribution where it counts.*
 
+## First results (2026-09-29)
+
+Layer-2 only, real model (`mDeBERTa-v3-base-mnli-xnli`), 28-item EN+ZH gold set,
+run on Linux via `Dockerfile.evidence` (uv):
+
+- **fabricated citations rejected: 9/9 = 100%** — the headline metric
+- genuine claims supported: 9/9 = 100%
+- overall 3-way verdict accuracy: 26/28 = 93%
+
+The two misses are instructive rather than failures: both near-miss fabrications
+(a "*coffee* market reached 15B" passage cited for a "*pet-food* market reached
+15B" claim) were labelled **refuted**, not **unsupported** — the model reads
+*same number, different subject* as a contradiction. Both still count as "not
+supported", so the rejection property holds; it is a labelling nuance to note in
+the report, not a leak. Speed: ~10 s/item on CPU — fine for eval, would batch/GPU
+in production. Still pending for the report's comparison: the LLM-judge-only
+baseline on the fabricated subset (expected to accept them via authority bias).
+
 ## Open choices
 
 - Validation dimensions — is **demand / competition / willingness-to-pay /

@@ -35,6 +35,16 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.8",
 ]
+# Evidence contract Layer-2 (OR-56): NLI attribution. Heavy (torch, transformers),
+# kept out of the base backend so the API image stays lean — installed only where
+# verification runs. CPU torch by default for reproducibility; a GPU box adds the
+# CUDA build separately. sentencepiece is required by mDeBERTa's tokenizer.
+evidence = [
+    "torch>=2.2",
+    "transformers>=4.44",
+    "sentencepiece>=0.2",
+    "huggingface-hub>=0.25",
+]
 
 [tool.setuptools.packages.find]
 where = ["backend"]   # finds `app` package inside backend/

@@ -1,0 +1,37 @@
+# Evidence-contract evaluation image (OR-63), uv-based.
+#
+# Separate from the backend image on purpose: the evidence extra pulls torch +
+# transformers (~GB), which must not bloat the API container. This runs the
+# Layer-2 NLI eval on Linux, where the CPU torch wheel loads cleanly (the
+# Windows dev box hits a VC-runtime DLL error that Linux does not).
+#
+# Build context is the repo root, because pyproject.toml + uv.lock live there.
+#   docker build -f Dockerfile.evidence -t orchid-evidence .
+#   docker run --rm -v orchid_hf:/root/.cache/huggingface orchid-evidence
+# or via compose:  docker compose --profile evidence run --rm evidence
+FROM python:3.11-slim
+
+# uv itself: a small pip bootstrap (default PyPI is reachable here). This is the
+# uv-in-Docker pattern to carry over to the backend image next.
+RUN pip install --no-cache-dir uv
+
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/root/.cache/huggingface
+
+WORKDIR /app
+
+# Manifests first so the dependency layer is cached across source edits.
+COPY pyproject.toml uv.lock ./
+COPY backend ./backend
+
+# Locked install of base + evidence deps (no dev). Reproducible via uv.lock.
+RUN uv sync --frozen --no-dev --extra evidence
+
+ENV PYTHONPATH=/app/backend
+
+# Default: run the eval. Override the args to run something else, e.g.
+#   docker run ... orchid-evidence uv run --frozen --extra evidence pytest backend/tests/test_evidence.py -q
+CMD ["uv", "run", "--frozen", "--no-dev", "--extra", "evidence", "python", "-m", "app.evidence.eval.run"]

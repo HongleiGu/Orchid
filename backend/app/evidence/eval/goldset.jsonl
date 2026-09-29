@@ -1,0 +1,28 @@
+{"statement": "The market grew 40 percent in 2026", "passage": "Industry reports show the market grew 40 percent in 2026.", "gold": "supported", "subset": "genuine", "lang": "en"}
+{"statement": "Users frequently request an offline mode", "passage": "Across app-store reviews, users frequently request an offline mode.", "gold": "supported", "subset": "genuine", "lang": "en"}
+{"statement": "The subscription costs 99 yuan per month", "passage": "The subscription is priced at 99 yuan per month for all users.", "gold": "supported", "subset": "genuine", "lang": "en"}
+{"statement": "Cross-border sellers spend hours writing multilingual listings", "passage": "Surveyed cross-border sellers report spending several hours per day writing product listings in multiple languages.", "gold": "supported", "subset": "genuine", "lang": "en"}
+{"statement": "There are more than fifty competitors in this category", "passage": "The analysis identified over fifty competing products in the category.", "gold": "supported", "subset": "genuine", "lang": "en"}
+{"statement": "The market grew 40 percent in 2026", "passage": "The market did not grow in 2026; it contracted by 5 percent.", "gold": "refuted", "subset": "contradiction", "lang": "en"}
+{"statement": "Customers are willing to pay for this feature", "passage": "In the survey, most customers said they would not pay extra for this feature.", "gold": "refuted", "subset": "contradiction", "lang": "en"}
+{"statement": "The product is available in Europe", "passage": "The product is not sold in any European market.", "gold": "refuted", "subset": "contradiction", "lang": "en"}
+{"statement": "The market grew 40 percent in 2026", "passage": "The weather in Beijing was mild throughout the spring of 2026.", "gold": "unsupported", "subset": "fabricated", "lang": "en"}
+{"statement": "There is strong demand for a paid weather app", "passage": "The company was founded in 2019 and is headquartered in Shenzhen.", "gold": "unsupported", "subset": "fabricated", "lang": "en"}
+{"statement": "The pet-food market reached 15 billion yuan in 2025", "passage": "According to the 2025 report, the coffee market reached 15 billion yuan, up 20 percent year over year.", "gold": "unsupported", "subset": "fabricated", "lang": "en"}
+{"statement": "Sellers want an automated pricing tool", "passage": "A 2026 white paper notes that logistics costs rose sharply for cross-border sellers.", "gold": "unsupported", "subset": "fabricated", "lang": "en"}
+{"statement": "Demand for the service is growing quickly", "passage": "The report discusses regulatory changes affecting data storage requirements.", "gold": "unsupported", "subset": "fabricated", "lang": "en"}
+{"statement": "The app has over one million users", "passage": "The app was updated in March to add a dark theme and bug fixes.", "gold": "unsupported", "subset": "neutral", "lang": "en"}
+{"statement": "The tool reduces listing time by 80 percent", "passage": "The tool offers a clean interface and supports several export formats.", "gold": "unsupported", "subset": "neutral", "lang": "en"}
+{"statement": "市场规模在2026年增长了百分之四十", "passage": "根据行业报告，该市场在2026年增长了百分之四十。", "gold": "supported", "subset": "genuine", "lang": "zh"}
+{"statement": "用户普遍希望增加离线模式", "passage": "在应用商店的评论中，用户普遍要求增加离线模式。", "gold": "supported", "subset": "genuine", "lang": "zh"}
+{"statement": "订阅价格为每月九十九元", "passage": "该订阅服务面向所有用户的价格为每月九十九元。", "gold": "supported", "subset": "genuine", "lang": "zh"}
+{"statement": "跨境卖家每天花数小时撰写多语言商品文案", "passage": "受访的跨境卖家表示，他们每天要花好几个小时用多种语言撰写商品文案。", "gold": "supported", "subset": "genuine", "lang": "zh"}
+{"statement": "市场规模在2026年增长了百分之四十", "passage": "该市场在2026年不但没有增长，反而收缩了百分之五。", "gold": "refuted", "subset": "contradiction", "lang": "zh"}
+{"statement": "顾客愿意为该功能付费", "passage": "在调查中，大多数顾客表示不愿意为该功能额外付费。", "gold": "refuted", "subset": "contradiction", "lang": "zh"}
+{"statement": "该产品已在欧洲上市", "passage": "该产品尚未在任何欧洲市场销售。", "gold": "refuted", "subset": "contradiction", "lang": "zh"}
+{"statement": "市场规模在2026年增长了百分之四十", "passage": "北京2026年春季的天气总体温和宜人。", "gold": "unsupported", "subset": "fabricated", "lang": "zh"}
+{"statement": "宠物食品市场在2025年达到一百五十亿元", "passage": "根据2025年的报告，咖啡市场达到一百五十亿元，同比增长百分之二十。", "gold": "unsupported", "subset": "fabricated", "lang": "zh"}
+{"statement": "卖家希望有一个自动定价工具", "passage": "2026年的一份白皮书指出，跨境卖家的物流成本大幅上升。", "gold": "unsupported", "subset": "fabricated", "lang": "zh"}
+{"statement": "该服务的需求增长很快", "passage": "该报告讨论了影响数据存储要求的监管变化。", "gold": "unsupported", "subset": "fabricated", "lang": "zh"}
+{"statement": "该应用拥有超过一百万用户", "passage": "该应用在三月更新，新增了深色主题并修复了若干问题。", "gold": "unsupported", "subset": "neutral", "lang": "zh"}
+{"statement": "该工具将文案撰写时间缩短了百分之八十", "passage": "该工具界面简洁，并支持多种导出格式。", "gold": "unsupported", "subset": "neutral", "lang": "zh"}

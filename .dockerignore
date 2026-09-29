@@ -1,0 +1,27 @@
+# Root build context (used by Dockerfile.evidence; and by the backend image if it
+# migrates to a root context later). Keep the context small and never ship envs,
+# caches, or the content vault into an image.
+.git/
+.venv/
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.pytest_cache/
+.ruff_cache/
+**/node_modules/
+**/dist/
+**/dev-dist/
+**/*.tsbuildinfo
+frontend/
+clients/
+vault/
+backend/data/
+backend/vault/
+docs/
+*.tar.gz
+images*/
+*.xlsx
+~$*
+.env
+.env.*
