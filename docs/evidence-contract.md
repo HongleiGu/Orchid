@@ -1,0 +1,158 @@
+# Evidence Contract — design note
+
+Status: draft · Owner: TBD · Last updated: 2026-09-29
+
+The spine of the **D substrate** (verified-knowledge engine) and therefore of
+**C** (idea discovery + validation). It replaces Orchid's current contract —
+which checks a run's *shape and process* (`required_sections`, `tool_called`, an
+LLM `gate:` verdict) — with one that checks the **epistemic status of every
+claim**: is each finding grounded in a real source, how strongly, and what was
+*not* found. Vertical workflow packs ("A") are deferred and out of scope here.
+
+This note is written to be citeable: it seeds a possible technical report, so
+each design choice names the prior work it rests on (references at the end).
+
+## Why the current contract is insufficient
+
+Today's checks are boolean and about the container, not the contents. For
+validation we need claim-level grounding, graded confidence, provenance quality,
+active falsification, and forward-checkable predictions. None of those exist yet.
+
+## The claim primitive
+
+Findings become discrete objects, not prose. This is the FActScore / SAFE /
+VeriScore atomic-claim approach; VeriScore's refinement — extract only
+*verifiable* claims, dropping opinion/judgment — matters because validation prose
+mixes the two.
+
+```
+Claim {
+  id
+  statement          # atomic, self-contained
+  type               # demand | competition | pricing | feasibility | regulatory | other
+  stance             # support | refute        (relative to the thesis under test)
+  sources[]          # {url, retrieved_at, published_at, tier(primary|secondary), passage}
+  entailment         # per source: {label(entail|neutral|contradict), score}   ← Layer 2
+  structured_check   # optional: {kind, passed, detail}                         ← Layer 1
+  confidence         # 0..1, aggregated (below)
+  verdict            # supported | refuted | unsupported | uncertain
+}
+```
+
+## Pipeline (adopted from automated fact-checking)
+
+The canonical AFC five-stage shape, not reinvented: **detect → prioritise →
+retrieve → verify → verdict** (AFC survey; ClaimCheck; Claim Verification in the
+Age of LLMs, 2026).
+
+```
+decompose   →  atomic verifiable claims (VeriScore-style extractor; LLM)
+retrieve    →  evidence per claim — deliberately BOTH supporting and refuting
+verify      →  the four layers below
+score       →  per-claim confidence → per-dimension → overall; abstain/escalate
+predict     →  emit falsifiable predictions → outcome store → recalibrate
+```
+
+## The four verification layers
+
+Cheapest and most reliable first; the LLM judge is last and constrained.
+
+| Layer | Purpose | Technique / model |
+|---|---|---|
+| **1 — deterministic** | numbers, dates, arithmetic, cross-figure consistency | plain Python; **Z3** only where cross-figure logic needs it (VeriFin pattern) |
+| **2 — reference (load-bearing)** | does the cited source actually *support* the claim | **NLI entailment** (ALCE method): claim must be entailed by the retrieved passage, not merely cited |
+| **3 — invariant (our addition)** | coverage & falsification | rule checks: every dimension covered or explicitly "no evidence found"; ≥K refuting sources sought per thesis; no market-size/pricing claim without a dated primary source |
+| **4 — judge (constrained)** | relevance, "is this framing misleading" | LLM-as-judge, **temp 0, last, never sole, and never trusted to check citations** |
+
+**Why the judge cannot check citations.** Large-scale evaluation finds LLM
+judges exhibit **authority bias — they favour answers containing citations even
+when the citations are fabricated** — plus verbosity/position/self-enhancement
+bias and temperature sensitivity (95%→70% same-verdict from temp 0→1). So
+citation checking must be *mechanical* (Layer 2 NLI against a really-retrieved
+passage), upstream of and independent from the judge. This inverts the naive
+"ask an LLM if it's well-supported" design. (Reliability without Validity, 2026.)
+
+## Concrete model choices (off-the-shelf; validate on our data)
+
+Deliberately small/deterministic where possible — the "small models for
+infrastructure" principle — which also keeps the report reproducible and cheap.
+
+- **Claim extraction:** the pipeline's existing LLM (DeepSeek) with a
+  VeriScore-style "extract verifiable claims + spans" prompt. Generation-ish;
+  a mid model is fine.
+- **NLI / entailment (Layer 2):** `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`
+  (multilingual zero-shot NLI, ~280M, CPU-viable) as default. Content is
+  bilingual (Chinese market + English sources), so a Chinese-tuned NLI
+  (CMNLI/OCNLI-finetuned RoBERTa-wwm or ERNIE) is a second head for zh-heavy text.
+- **NER (entity grounding):** HanLP or `hfl/chinese-roberta-wwm-ext` for zh,
+  spaCy multilingual for en — to align entities across claim and source and
+  catch entity drift (小米 the company vs the product).
+- **Structured (Layer 1):** Python; Z3 only for cross-figure consistency.
+- **Confidence:** aggregate per-claim NLI probability × source tier × corroboration
+  count; calibrate (below).
+
+**Caveat that forces the outcome store:** attribution/factuality metrics
+**do not transfer across domains** ("Do LLM Attribution Metrics Transfer?",
+2026). We must recalibrate on our own labelled data — so the outcome store is
+mandatory, not optional.
+
+## Confidence → selective prediction
+
+Confidence is not decorative; it drives **abstention/escalation**. Below a
+calibrated threshold the system says "insufficient evidence / needs a human"
+rather than asserting — the established selective-prediction pattern, which
+reduces hallucination and is measured with **ECE / Brier**. Thresholds are set
+against the outcome store, not guessed.
+
+## Outcome store (the flywheel)
+
+Each validation emits ≥1 structured, later-checkable prediction. When reality
+lands, the prediction is reconciled → this both **calibrates** the confidence
+model and accumulates a proprietary track record no fresh model has. Minimal
+from day one.
+
+## Reuse vs. new (against the current codebase)
+
+- **Reuse:** `RunEventType.CONTRACT_CHECK` (emit per-claim results); the
+  verifier→critic→reviser loop and bounded DAG loops (retry within budget);
+  spans + per-span cost (observability of the verification path); vault
+  (evidence store).
+- **New:** the Claim schema; Layer-2 NLI service; Layer-3 coverage/falsification
+  invariants; confidence aggregation + calibration; the outcome store; connectors
+  for real signal.
+
+## Evaluation plan (for the technical report)
+
+1. **Gold set:** ~200–300 claims sampled from our domain (idea-validation /
+   market findings), EN + ZH, each labelled `{supported | refuted | unsupported}`
+   with gold source spans. Include a subset with **fabricated or mismatched
+   citations**.
+2. **Metrics:** attribution precision/recall (ALCE-style, NLI-based); veracity
+   accuracy; calibration (ECE, Brier); risk–coverage (selective-prediction)
+   curve; Layer-3 invariant pass rates.
+3. **Headline experiment:** layered evidence contract **vs. an LLM-judge-only
+   baseline**, on the fabricated-citation subset — expected result: the judge
+   accepts fabricated citations (authority bias) while Layer-2 NLI rejects them.
+   Clean, literature-grounded, and directly the report's thesis: *mechanical
+   attribution beats judge-based attribution where it counts.*
+
+## Open choices
+
+- Validation dimensions — is **demand / competition / willingness-to-pay /
+  feasibility / regulatory** the right "worth doing" checklist, or framed
+  differently?
+- One multilingual NLI head vs. separate en/zh heads.
+- How much Z3 is worth it vs. plain arithmetic checks (probably: very little).
+
+## References
+
+- A Survey on Automated Fact-Checking — arXiv:2108.11896
+- Claim Verification in the Age of LLMs (survey), ACL SRW 2026 — aclanthology 2026.acl-srw.2
+- ClaimCheck: Real-Time Fact-Checking with Small LMs — arXiv:2510.01226
+- FActScore — arXiv:2305.14251 · SAFE (long-form factuality) · VeriScore — arXiv:2406.19276
+- ALCE (NLI-based citation recall/precision) · attribution frameworks (AIS, AttrScore, RAGAS, CiteEval)
+- Do LLM Attribution Metrics Transfer? — arXiv:2606.23915
+- VeriFin (neurosymbolic, Z3, financial claims) — arXiv:2608.10213 · VERGE — arXiv:2601.20055
+- Logical Soundness is not a Reliable Criterion for Neurosymbolic Fact-Checking — arXiv:2604.04177
+- Reliability without Validity: LLM-as-a-Judge at scale — arXiv:2606.19544
+- Uncertainty-Based Abstention Improves Safety — arXiv:2404.10960 · selective prediction / calibration (ECE, Brier)
