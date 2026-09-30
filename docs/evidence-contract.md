@@ -150,9 +150,31 @@ The two misses are instructive rather than failures: both near-miss fabrications
 15B" claim) were labelled **refuted**, not **unsupported** — the model reads
 *same number, different subject* as a contradiction. Both still count as "not
 supported", so the rejection property holds; it is a labelling nuance to note in
-the report, not a leak. Speed: ~10 s/item on CPU — fine for eval, would batch/GPU
-in production. Still pending for the report's comparison: the LLM-judge-only
-baseline on the fabricated subset (expected to accept them via authority bias).
+the report, not a leak. Speed: ~1.4 s/item on CPU in Docker.
+
+### LLM-judge baseline (`--judge`, `openrouter/openai/gpt-4o-mini`, 2026-09-30)
+
+The headline comparison — and the expected result **did not reproduce**. An
+ordinary judge ("does this source support this claim?", temp 0) scored
+**fabricated rejected 9/9 = 100%** and **genuine accepted 9/9 = 100%**, matching
+Layer-2 NLI. It even beat NLI on the two near-misses, correctly calling them
+*unsupported* with the right reason ("*Source discusses coffee market, not
+pet-food market*") where NLI over-fired to *refuted*.
+
+**Honest reading:** on *this* gold set the judge does not exhibit authority bias,
+because the fabrications are **blatantly off-topic** (weather for a market claim,
+coffee for pet-food) — a capable modern judge catches those. So this set cannot
+separate the two methods on accuracy; the bias in the literature needs **harder
+fabrications** to surface (on-topic wrong-number, the claim embedded verbatim in
+an otherwise-unrelated passage, adversarial phrasing). Building that adversarial
+subset is the next step before the report can claim an accuracy gap.
+
+What already holds *regardless* of the accuracy tie, and is the defensible thesis
+today: Layer-2 NLI is **deterministic, ~free, and local**, versus the judge's
+per-item token cost, latency, and **temperature non-determinism** (95%→70%
+same-verdict from temp 0→1, per *Reliability without Validity*). Mechanical
+attribution wins on cost, reproducibility and auditability — not (yet, on our
+data) on raw accuracy. The report should say exactly that rather than overclaim.
 
 ## Open choices
 

@@ -87,3 +87,43 @@ def test_best_entailment_prefers_entail_then_score():
                            "Users want offline mode.", "Unrelated text about cats."), NLI)
     best = c.best_entailment()
     assert best is not None and best.label == EntailmentLabel.ENTAIL
+
+
+# ── LLM-judge baseline (the thing the contract is measured against) ───────────
+
+def test_judge_parse_reads_json_verdict_and_reason():
+    from app.evidence.judge import _parse
+    v = _parse('{"supported": true, "reason": "the report gives the figure"}')
+    assert v.supported is True and "report" in v.reason
+    v = _parse('nonsense before {"supported": false, "reason": "off topic"} after')
+    assert v.supported is False and v.reason == "off topic"
+
+
+def test_judge_parse_falls_back_to_yes_no_scan():
+    from app.evidence.judge import _parse
+    assert _parse("Yes, clearly supported.").supported is True
+    assert _parse("No — the source is unrelated.").supported is False
+
+
+def test_llm_judge_uses_injected_completion():
+    from app.evidence.judge import LLMJudge
+    calls = []
+
+    def fake(system, user):
+        calls.append(user)
+        return '{"supported": true, "reason": "cites a 2025 report"}'
+
+    v = LLMJudge(model="x", complete_fn=fake).judge("市场规模达到五十亿元", "根据报告……")
+    assert v.supported is True and calls, "the claim and passage must reach the model"
+
+
+def test_stub_judge_shows_authority_bias():
+    """The stub reproduces the failure the eval measures: a fabricated citation
+    that merely looks authoritative is accepted."""
+    from app.evidence.judge import StubJudge
+    j = StubJudge()
+    # unrelated but authoritative-sounding (has a number) → wrongly accepted
+    assert j.judge("The pet-food market reached 15B yuan",
+                   "The coffee market reached 15B yuan in 2025.").supported is True
+    # no authority signal → not accepted
+    assert j.judge("Demand is large", "the weather was mild").supported is False
