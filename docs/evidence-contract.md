@@ -176,6 +176,50 @@ same-verdict from temp 0→1, per *Reliability without Validity*). Mechanical
 attribution wins on cost, reproducibility and auditability — not (yet, on our
 data) on raw accuracy. The report should say exactly that rather than overclaim.
 
+### On a real academic benchmark: GaRAGe (2026-09-30)
+
+The toy set couldn't separate the methods, so we re-ran on **GaRAGe** (Amazon,
+ACL 2025) — RAG answers with **human per-citation labels**. We take the cleanest
+unit (answer sentences citing exactly one source) and use GaRAGe's own labels:
+`ANSWER-THE-QUESTION` → supported; `RELATED-INFORMATION` (on-topic but does *not*
+support the claim) / `OUTDATED` / irrelevant → unsupported. No synthetic pairs.
+Sample: 88 real mis-citations + 92 genuine; NLI = `mDeBERTa`, judge = `gpt-4o-mini`.
+
+| on GaRAGe | mis-citations **rejected** | genuine **accepted** |
+|---|---|---|
+| **Layer-2 NLI** | **80%** (70/88) | **21%** (19/92) |
+| **LLM judge** | **5%** (4/88) | **90%** (83/92) |
+
+**This is the real result, and it cuts both ways.** The judge's authority /
+topicality bias reproduced *hard*: it accepts 84/88 on-topic-but-unsupportive
+citations, justifying each by pointing at the passage's topic ("*Source mentions
+…*", "*Source confirms …*") — it never checks entailment. That is the case for
+never letting the judge check citations.
+
+But **naive full-sentence NLI is too strict**: it wrongly rejects 79% of genuine
+citations. The two methods fail as **mirror images** — the judge is credulous
+(low precision), this NLI is over-strict (low recall); both land near 49% binary
+accuracy on opposite sides. The 100% on the toy set was an artefact of passages
+that literally contained the claim.
+
+Diagnosis (checked, not guessed): **not truncation** — only 1% of passages exceed
+the model's 512-token limit. The cause is that GaRAGe's genuine "claims" are
+*abstractive* answer sentences ("*it has revolutionised …*", "*particularly
+valuable …*") that go beyond any single source, so a strict entailment model
+returns *neutral*. This is exactly the failure the design's **atomic claim
+decomposition** step exists to fix (and why grounding-tuned checkers like
+MiniCheck outperform vanilla NLI on real LLM output).
+
+**What this changes for the report.** The thesis is *not* "NLI beats the judge on
+accuracy" — it is: **neither method is a verifier alone**, which is the empirical
+case *for the layered contract*. Mechanical entailment must be the citation gate
+(the judge cannot be trusted there — 5% rejection), but it needs claim
+decomposition + a grounding-tuned checker to be usable for recall; the judge is
+constrained to relevance/framing, never citations. Next steps this implies:
+(1) add the decompose step and re-measure NLI recall; (2) swap in / add a
+MiniCheck-style checker as a second Layer-2 head; (3) report precision *and*
+recall, never a single accuracy number.
+
 ## Open choices
 
 - Validation dimensions — is **demand / competition / willingness-to-pay /
