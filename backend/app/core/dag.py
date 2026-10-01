@@ -998,23 +998,25 @@ def _grounding_sources(output: AgentOutput, upstream: dict[str, AgentOutput],
 
 
 def _grounding_sync(verifier: Any, claims: list[str], sources: list[str], min_grounded: float) -> dict:
-    from app.evidence.schema import Claim, Source, Verdict
-    from app.evidence.verify import verify_claim
+    from app.evidence.schema import Claim, EntailmentLabel, Source
+    from app.evidence.verify import CONFIDENCE_FLOOR, _best_entailment_for
 
-    srcs = [Source(passage=s) for s in sources]
-    ungrounded = []
+    holder = Claim(statement="", sources=[Source(passage=s) for s in sources])
+    ungrounded: list[str] = []
     for stmt in claims:
-        c = verify_claim(Claim(statement=stmt, sources=srcs), verifier)
-        if c.verdict != Verdict.SUPPORTED:
+        # Early-exits at the first source chunk that entails the claim, so a
+        # grounded claim costs one NLI call, not one per chunk.
+        deciding, _ = _best_entailment_for(verifier, holder, stmt, CONFIDENCE_FLOOR)
+        grounded = deciding.label == EntailmentLabel.ENTAIL and deciding.score >= CONFIDENCE_FLOOR
+        if not grounded:
             ungrounded.append(stmt)
-    grounded = len(claims) - len(ungrounded)
-    frac = grounded / len(claims)
-    ok = frac >= min_grounded
-    reason = (f"{grounded}/{len(claims)} claims grounded in {len(sources)} evidence chunks "
+    n_grounded = len(claims) - len(ungrounded)
+    frac = n_grounded / len(claims)
+    reason = (f"{n_grounded}/{len(claims)} claims grounded in {len(sources)} evidence chunks "
               f"= {frac:.0%} (threshold {min_grounded:.0%}).")
     if ungrounded:
         reason += " Ungrounded claims: " + " | ".join(u[:90] for u in ungrounded[:5])
-    return {"ok": ok, "reason": reason}
+    return {"ok": frac >= min_grounded, "reason": reason, "fraction": frac, "ungrounded": ungrounded}
 
 
 async def _run_grounding_check(output: AgentOutput, upstream: dict[str, AgentOutput],
@@ -1030,7 +1032,10 @@ async def _run_grounding_check(output: AgentOutput, upstream: dict[str, AgentOut
                              "Grounding check skipped: no claims or no upstream evidence to check against.")
     min_grounded = float(check.get("min_grounded", 0.8) or 0.8)
     result = await asyncio.to_thread(_grounding_sync, verifier, claims, sources, min_grounded)
-    return _check_result(index, "grounded", "pass" if result["ok"] else "fail", result["reason"])
+    out = _check_result(index, "grounded", "pass" if result["ok"] else "fail", result["reason"])
+    out["fraction"] = result["fraction"]
+    out["ungrounded"] = result["ungrounded"]
+    return out
 
 
 def _normalize_contract(contract: dict) -> dict:
