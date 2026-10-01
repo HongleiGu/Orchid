@@ -220,6 +220,52 @@ constrained to relevance/framing, never citations. Next steps this implies:
 MiniCheck-style checker as a second Layer-2 head; (3) report precision *and*
 recall, never a single accuracy number.
 
+### Decomposition alone is not the recall fix (2026-10-01)
+
+Added VeriScore-style decomposition (an LLM splits the statement into atomic
+claims, flags verifiable vs opinion; each verifiable atom is checked by NLI — the
+decomposer never sees the source, so judge-bias cannot re-enter). Re-ran the same
+180 GaRAGe items:
+
+| | mis-citations rejected | genuine accepted | binary acc |
+|---|---|---|---|
+| plain NLI | 80% | 21% | 49% |
+| **+ decomposition** | 75% | 28% | 51% |
+
+Recall barely moved (21→28%) and rejection slipped (80→75%). A per-atom dump
+(`--show-atoms`) explains why — decomposition introduced two *new* failure modes:
+
+1. **Over-aggressive opinion flagging** — the decomposer marks genuine factual
+   clauses ("asymptotic solutions provide insights…") as opinion, leaving zero
+   verifiable atoms → whole-statement fallback → wrongly unsupported.
+2. **One atom flips genuine → refuted** — a multi-fact sentence decomposed against
+   a *single* passage yields an atom the passage seems to contradict ("the merger
+   *failed*", "Vegas *won* on 2018-10-06", 0.97/0.99), and the "any contradicted
+   atom refutes" rule flips the whole claim. Decomposition *created* false
+   refutations.
+3. **Strict all-atom entailment vs multi-source sentences** — "volatility affects
+   bond yields / stock prices / currency" (1/6 entailed): the RAG answer synthesised
+   several sources, but we test against only the one cited passage, so most atoms
+   cannot be entailed. Structural, not a model error.
+   Rejection also slipped because generic atoms ("the company faced challenges") are
+   entailed by an on-topic passage → leak.
+
+**Conclusion.** The recipe "decompose + strict/brittle aggregation + a generic
+MNLI model" is wrong. The principled fixes, in order of expected payoff:
+(a) **aggregation policy** — do not require *all* atoms; do not let a single
+mid-confidence "contradict" flip to refuted (treat it as neutral unless strong and
+corroborated); score K-of-N against a calibrated threshold. Cheap, no new model.
+(b) **test each atom against the full evidence set** for the answer (GaRAGe ships
+all grounding passages), not just the one cited passage — the single-passage
+restriction artificially caps recall.
+(c) **a grounding-tuned checker (MiniCheck)** instead of vanilla mDeBERTa — trained
+precisely on "does this document support this synthesised claim", robust to the
+abstraction/paraphrase/multi-fact cases where MNLI misfires. New model + Docker
+rebuild.
+This is itself a report result: it characterises *why* naive mechanical attribution
+underperforms and what the engineering actually requires — strengthening the
+"carefully layered" thesis over both "just use NLI" and "just use a judge".
+
 ## Open choices
 
 - Validation dimensions — is **demand / competition / willingness-to-pay /

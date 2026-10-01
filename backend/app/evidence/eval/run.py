@@ -133,6 +133,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--decompose", action="store_true", help="verify via atomic claim decomposition (LLM extract; spends tokens)")
     ap.add_argument("--decompose-stub", action="store_true", help="decomposition via the offline stub splitter (no key)")
     ap.add_argument("--decompose-model", default=None, help=f"LLM model for decomposition (default: {DEFAULT_JUDGE_MODEL})")
+    ap.add_argument("--show-atoms", action="store_true", help="print per-atom entailment (diagnostic; use with a small --limit)")
     args = ap.parse_args(argv)
 
     if args.stub:
@@ -168,6 +169,15 @@ def main(argv: list[str]) -> int:
         claim = Claim(statement=g["statement"], sources=[Source(passage=g["passage"])])
         c = verify_claim_decomposed(claim, nli, decomposer) if decomposer else verify_claim(claim, nli)
         rows.append((g, c.verdict, c.confidence))
+        if args.show_atoms and c.atoms:
+            miss = (c.verdict == Verdict.SUPPORTED) != (g["gold"] == "supported")
+            ent = sum(1 for a in c.atoms if a.verifiable and a.verdict == Verdict.SUPPORTED)
+            vf = sum(1 for a in c.atoms if a.verifiable)
+            print(f"\n[{'MISS' if miss else 'ok'}] gold={g['gold']} pred={c.verdict.value}  "
+                  f"atoms entailed {ent}/{vf} (of {len(c.atoms)} total)")
+            for a in c.atoms:
+                flag = "verif" if a.verifiable else "OPIN "
+                print(f"    {flag} {a.verdict.value:11} ({a.confidence:.2f})  {a.text[:70]}")
     elapsed = time.time() - t0
 
     def is_supported(v: Verdict) -> bool:
