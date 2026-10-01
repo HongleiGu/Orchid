@@ -311,6 +311,38 @@ Next: calibrate `support_fraction` and the abstention threshold against the outc
 store (OR-60); try finer, question-anchored decomposition to recover related-only
 rejection; keep mDeBERTa as the zh head (MiniCheck is English-only).
 
+### Routing Layer-2 into the live pipeline — the same lesson (2026-10-01)
+
+Wired a `grounded` contract check into the DAG engine (OR-58): it verifies a
+node's claims against its upstream evidence via Layer-2 NLI and feeds the
+ungrounded sentences into the existing retry/revise loop. Added a DRA-shaped
+`autonomous-research-grounded` workflow (plan → retrieve → write, writer gated by
+the check) and an offline measurement loop (Tavily retrieve → LLM write → NLI
+check → revise → re-check).
+
+**Live result: naive wiring does NOT improve the pipeline — it over-rejects.**
+On a real research brief (grounded, well-cited), whole-sentence NLI against raw
+web chunks scored grounded 25%→0% (mDeBERTa) / 12% (MiniCheck), and the revise
+loop *degraded* the text (the writer hedged further from literal entailment).
+
+A `--debug` dump pinned the cause — and it is **not** NLI error:
+1. retrieved "sources" are raw web-scrape (nav, "FAQ", "arXiv logo Back to
+   arXiv"), chunked into 40 noisy fragments;
+2. the supporting facts are present but **split across chunks** ("80% agreement"
+   in one, "50% error rates" in another);
+3. the writer **synthesises multi-fact sentences spanning chunks/sources**, and
+   the check tests each whole sentence against a single 3-sentence chunk — so it
+   cannot match even though every sub-fact exists.
+
+This is the GaRAGe lesson reproduced in the pipeline: whole-sentence entailment is
+the wrong unit. The fix is the machinery already built — **atomic decomposition**
+(check each sub-fact, not the combined sentence) + **full-evidence matching**
+(an atom against all chunks, not one window) — plus **cleaner retrieved passages**
+(strip boilerplate; prefer abstracts over scraped HTML). So: Layer-2 improves the
+pipeline only with the decomposition/full-evidence machinery, not as a naive
+sentence-vs-chunk gate. Next: route `verify_claim_decomposed` + full-evidence into
+the `grounded` check and re-measure; clean the retriever's passages.
+
 ## Open choices
 
 - Validation dimensions — is **demand / competition / willingness-to-pay /

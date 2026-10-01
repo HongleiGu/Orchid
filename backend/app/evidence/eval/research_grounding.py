@@ -77,6 +77,7 @@ async def main(argv: list[str]) -> int:
     ap.add_argument("--k", type=int, default=6, help="sources to retrieve")
     ap.add_argument("--max-revises", type=int, default=2)
     ap.add_argument("--minicheck", action="store_true", help="use MiniCheck as the grounding verifier")
+    ap.add_argument("--debug", action="store_true", help="dump source chunks + per-claim entailment scores")
     ap.add_argument("--nli-model", default=None, help="NLI model/path (hub id or local)")
     args = ap.parse_args(argv)
 
@@ -97,6 +98,25 @@ async def main(argv: list[str]) -> int:
         return 1
 
     brief = write(args.model, args.query, sources)
+
+    if args.debug:
+        from app.core.types import AgentOutput as _AO
+        up = {"retrieve": _AO(content="\n\n".join(sources), agent_name="retrieve")}
+        chunks = dag._grounding_sources(_AO(content=brief), up, {"sources": ["retrieve"]})
+        print(f"--- {len(chunks)} source chunks ---")
+        for i, c in enumerate(chunks):
+            print(f"  [C{i}] {c[:160]}")
+        verifier = dag._get_grounding_verifier()
+        print("\n--- per-claim best entailment across chunks ---")
+        for stmt in dag._split_claims(brief):
+            best_lbl, best_s, best_i = None, -1.0, -1
+            for i, c in enumerate(chunks):
+                lbl, s = verifier.entail(c, stmt)
+                signed = s if lbl.value == "entail" else -s
+                if signed > best_s:
+                    best_lbl, best_s, best_i = lbl.value, signed, i
+            print(f"  [{best_lbl} {best_s:+.2f} @C{best_i}] {stmt[:80]}")
+        print()
     frac, ungrounded, status = await grounded_report(brief, sources)
     history = [(0, frac, len(ungrounded), status)]
     print(f"[attempt 0] grounded {frac:.0%}  contract={status}  ungrounded={len(ungrounded)}")
