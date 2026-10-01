@@ -39,7 +39,7 @@ import sys
 import time
 
 from app.evidence.schema import Claim, Source, Verdict
-from app.evidence.verify import verify_claim
+from app.evidence.verify import verify_claim, verify_claim_decomposed
 
 GOLD = pathlib.Path(__file__).with_name("goldset.jsonl")
 DEFAULT_JUDGE_MODEL = os.getenv("LLM_JUDGE_MODEL") or os.getenv("LLM_DEFAULT_MODEL") or "deepseek/deepseek-chat"
@@ -130,6 +130,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--judge", action="store_true", help="also run the LLM-judge baseline (spends tokens; needs a key)")
     ap.add_argument("--judge-stub", action="store_true", help="run the judge baseline against an offline stub (no key)")
     ap.add_argument("--judge-model", default=None, help=f"LLM model for the judge (default: {DEFAULT_JUDGE_MODEL})")
+    ap.add_argument("--decompose", action="store_true", help="verify via atomic claim decomposition (LLM extract; spends tokens)")
+    ap.add_argument("--decompose-stub", action="store_true", help="decomposition via the offline stub splitter (no key)")
+    ap.add_argument("--decompose-model", default=None, help=f"LLM model for decomposition (default: {DEFAULT_JUDGE_MODEL})")
     args = ap.parse_args(argv)
 
     if args.stub:
@@ -140,6 +143,16 @@ def main(argv: list[str]) -> int:
         name = args.model or DEFAULT_MODEL
         nli = TransformersNLI(model_name=name)
 
+    decomposer = None
+    decomp_name = "off"
+    if args.decompose_stub:
+        from app.evidence.decompose import StubDecomposer
+        decomposer, decomp_name = StubDecomposer(), "StubDecomposer (offline)"
+    elif args.decompose:
+        from app.evidence.decompose import LLMDecomposer
+        decomp_name = args.decompose_model or DEFAULT_JUDGE_MODEL
+        decomposer = LLMDecomposer(model=decomp_name)
+
     if args.benchmark:
         from app.evidence.eval.benchmarks import LOADERS
         gold = LOADERS[args.benchmark](path=args.data, limit=args.limit, seed=args.seed)
@@ -147,12 +160,13 @@ def main(argv: list[str]) -> int:
     else:
         gold = load_gold()
         source = "goldset"
-    print(f"model: {name}\nbenchmark: {source}\ngold items: {len(gold)}\n")
+    print(f"model: {name}\nbenchmark: {source}\ndecompose: {decomp_name}\ngold items: {len(gold)}\n")
 
     t0 = time.time()
     rows = []
     for g in gold:
-        c = verify_claim(Claim(statement=g["statement"], sources=[Source(passage=g["passage"])]), nli)
+        claim = Claim(statement=g["statement"], sources=[Source(passage=g["passage"])])
+        c = verify_claim_decomposed(claim, nli, decomposer) if decomposer else verify_claim(claim, nli)
         rows.append((g, c.verdict, c.confidence))
     elapsed = time.time() - t0
 

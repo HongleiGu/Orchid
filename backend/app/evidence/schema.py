@@ -68,6 +68,21 @@ class StructuredCheck(BaseModel):
     detail: str = ""
 
 
+class AtomicClaim(BaseModel):
+    """One atomic sub-claim of a statement (VeriScore-style decomposition).
+
+    A statement like "scRNA-seq is valuable and has revolutionised biology" is an
+    abstractive mix of checkable fact and opinion. Checking it whole makes a strict
+    entailment model return *neutral* (low recall). Decomposing it, keeping only the
+    `verifiable` atoms, and checking each against the source recovers recall without
+    trusting a judge — the verdict still comes from mechanical NLI per atom.
+    """
+    text: str
+    verifiable: bool = True            # False = opinion/judgment; not graded
+    verdict: Verdict = Verdict.UNSUPPORTED
+    confidence: float = 0.0
+
+
 class Claim(BaseModel):
     statement: str
     type: ClaimType = ClaimType.OTHER
@@ -75,6 +90,7 @@ class Claim(BaseModel):
     sources: list[Source] = Field(default_factory=list)
 
     # Filled by verification.
+    atoms: list[AtomicClaim] = Field(default_factory=list)
     entailments: list[Entailment] = Field(default_factory=list)
     structured_checks: list[StructuredCheck] = Field(default_factory=list)
     confidence: float = 0.0

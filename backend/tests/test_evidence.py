@@ -6,6 +6,8 @@ harness (app/evidence/eval), not here.
 """
 from __future__ import annotations
 
+import json
+
 from app.evidence.nli import StubNLI
 from app.evidence.schema import Claim, EntailmentLabel, Source, Stance, Verdict
 from app.evidence.verify import verify_claim
@@ -127,3 +129,62 @@ def test_stub_judge_shows_authority_bias():
                    "The coffee market reached 15B yuan in 2025.").supported is True
     # no authority signal → not accepted
     assert j.judge("Demand is large", "the weather was mild").supported is False
+
+
+# ── claim decomposition (the recall fix for Layer-2) ──────────────────────────
+
+def _fixed_decomposer(atoms):
+    """An LLMDecomposer whose LLM call is stubbed to return a fixed atom list."""
+    from app.evidence.decompose import LLMDecomposer
+    payload = json.dumps(atoms)
+    return LLMDecomposer(model="x", complete_fn=lambda s, u: payload)
+
+
+def test_decompose_parse_reads_text_and_verifiable():
+    d = _fixed_decomposer([{"text": "users want offline mode", "verifiable": True},
+                           {"text": "it is revolutionary", "verifiable": False}])
+    atoms = d.decompose("whatever")
+    assert [a.text for a in atoms] == ["users want offline mode", "it is revolutionary"]
+    assert [a.verifiable for a in atoms] == [True, False]
+
+
+def test_stub_decomposer_splits_clauses():
+    from app.evidence.decompose import StubDecomposer
+    atoms = StubDecomposer().decompose("Users want offline mode and the price is 99 yuan")
+    assert len(atoms) == 2 and all(a.verifiable for a in atoms)
+
+
+def test_decomposition_rescues_an_abstractive_claim():
+    """The crux of the recall fix: an opinion-laden claim whose *factual* atom is
+    entailed is SUPPORTED even though the whole sentence is not entailed, because
+    the opinion atom is dropped rather than graded."""
+    from app.evidence.verify import verify_claim, verify_claim_decomposed
+    statement = "Users frequently request offline mode and it is a game-changing feature"
+    passage = "Reviews show users frequently request offline mode."
+    c = claim(statement, passage)
+    # Whole-sentence NLI (stub) fails: the sentence is not contained in the passage.
+    assert verify_claim(claim(statement, passage), NLI).verdict != Verdict.SUPPORTED
+    # Decomposed: factual atom entailed, opinion atom not graded → SUPPORTED.
+    d = _fixed_decomposer([{"text": "Users frequently request offline mode", "verifiable": True},
+                           {"text": "offline mode is a game-changing feature", "verifiable": False}])
+    out = verify_claim_decomposed(c, NLI, d)
+    assert out.verdict == Verdict.SUPPORTED
+    assert len(out.atoms) == 2 and sum(a.verifiable for a in out.atoms) == 1
+
+
+def test_decomposition_still_rejects_a_mis_citation():
+    """Decomposition must not leak support: an on-topic-but-unrelated passage
+    entails none of the atoms → UNSUPPORTED (the property we must preserve)."""
+    from app.evidence.verify import verify_claim_decomposed
+    c = claim("The pet-food market reached 15 billion yuan in 2025",
+              "The weather in Beijing was mild throughout the spring.")
+    d = _fixed_decomposer([{"text": "The pet-food market reached 15 billion yuan in 2025", "verifiable": True}])
+    assert verify_claim_decomposed(c, NLI, d).verdict != Verdict.SUPPORTED
+
+
+def test_decomposition_with_no_verifiable_atoms_falls_back():
+    from app.evidence.verify import verify_claim_decomposed
+    c = claim("This product is wonderful", "Reviews show users frequently request offline mode.")
+    d = _fixed_decomposer([{"text": "it is wonderful", "verifiable": False}])
+    # No gradeable atom → whole-statement fallback, which the stub cannot entail.
+    assert verify_claim_decomposed(c, NLI, d).verdict != Verdict.SUPPORTED
