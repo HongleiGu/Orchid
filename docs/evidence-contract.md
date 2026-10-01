@@ -266,6 +266,51 @@ This is itself a report result: it characterises *why* naive mechanical attribut
 underperforms and what the engineering actually requires — strengthening the
 "carefully layered" thesis over both "just use NLI" and "just use a judge".
 
+### The operating point is a dial, not a winner (2026-10-01)
+
+Implemented all three fixes and measured them against the same GaRAGe items:
+
+| config | mis-cites rejected | genuine accepted | binary acc |
+|---|---|---|---|
+| plain mDeBERTa, cited-only | **80%** | 21% | 49% |
+| mDeBERTa + decompose, cited-only | 75% | 28% | 51% |
+| **MiniCheck + decompose, cited-only** | 44% | 67% | **56%** |
+| MiniCheck + decompose + full-evidence | 34% | **74%** | 54% |
+| *LLM judge (reference)* | *5%* | *90%* | *~49%* |
+
+(Last two framings are the recall-oriented ones; full-evidence = atoms checked
+against all grounding passages, ≤5. MiniCheck = `MiniCheck-DeBERTa-v3-Large`,
+grounding-tuned, binary so it never false-refutes.)
+
+**The real finding: the contract's operating point is an engineerable dial.** Each
+lever — model (mDeBERTa↔MiniCheck), decomposition, `support_fraction`, evidence
+scope — slides it monotonically along a precision/recall frontier, from
+(80% reject / 21% accept) to (34% / 74%). The LLM judge sits off the useful part
+of that frontier entirely, pinned at the credulous extreme (5% / 90%) and
+un-dial-able — it cannot be configured to reject mis-citations. That is the
+durable result, stronger than any single accuracy number.
+
+**Why no config rejects *and* accepts well on GaRAGe — a measurement-validity
+point.** GaRAGe's `related-only` label means "this citation does not *answer the
+question*", but our contract asks "is this atomic claim *grounded* in the passage".
+On related-only items those diverge: the on-topic passage genuinely does state the
+generic atomic facts ("businesses face uncertainty"), so a good grounding checker
+*accepts* them — correct by our question, "wrong" by GaRAGe's. The two metrics
+agree on genuine and on blatantly-irrelevant citations and diverge precisely on
+related-only, which is why the dial cannot reach high-reject + high-accept on this
+benchmark. The gate use case (keep fabricated/mismatched citations out of the
+substrate) wants the high-reject end; answer-groundedness wants the high-recall
+end; both are the same machinery at a different setting.
+
+**What this means for the product.** Pick the operating point per use:
+- **citation gate** (default for the substrate): strict mDeBERTa, cited-only,
+  `support_fraction`→1.0 — maximise rejection, and route the rest to abstain /
+  escalate (selective prediction), never to the judge;
+- **answer-groundedness / recall**: MiniCheck + decomposition + full evidence.
+Next: calibrate `support_fraction` and the abstention threshold against the outcome
+store (OR-60); try finer, question-anchored decomposition to recover related-only
+rejection; keep mDeBERTa as the zh head (MiniCheck is English-only).
+
 ## Open choices
 
 - Validation dimensions — is **demand / competition / willingness-to-pay /
