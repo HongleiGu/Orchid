@@ -1,0 +1,188 @@
+# Mechanical Attribution as a Contract
+
+### Routing NLI grounding into agent workflows, and where a judge cannot go
+
+*Orchid evidence-contract technical report · checkpoint · 2026-10-01*
+
+## Abstract
+
+Deep-research agents have a *verification gap*: 11–57% of their citations are
+hallucinated, and commercial systems cite sources that do not support their
+claims 6–22% of the time. The reflexive fix — ask an LLM "is this well-supported?"
+— fails, because LLM judges exhibit **authority bias**: they accept a claim
+because a source is *present and on-topic*, not because it *entails* the claim.
+We argue citation-checking must instead be **mechanical** (NLI entailment),
+**decomposed** (per atomic sub-claim), and **upstream of** any judge. We build
+this as a contract check, route it into a real auto-research pipeline, and report
+three connected results on the public GaRAGe benchmark (ACL 2025) and in the
+pipeline: (1) on human-labelled mis-citations a constrained LLM judge rejects only
+**5%** where mechanical NLI rejects **80%**; (2) mechanical attribution is a
+**tunable precision/recall dial** (from 80%/21% to 34%/74% reject/accept) that the
+judge sits off entirely; (3) naive sentence-level grounding *degrades* a research
+pipeline, but **decomposition + full-evidence** lifts groundedness to the point the
+contract passes, and in the pipeline the judge accepts **92%** of the claims the
+NLI gate rejects. Finally we note the boundary of NLI grounding — it checks claim
+*content*, not citation *identity* — and add a cheap mechanical check for that.
+
+## 1. The problem
+
+LLM-as-a-judge is the default evaluation and gating pattern. For *attribution* —
+does a cited source support the claim — it is the wrong tool. Large-scale work
+(*Reliability without Validity*, 2026) finds judges favour answers that carry a
+citation **even when the citation is fabricated**, alongside verbosity, position,
+and self-enhancement bias and temperature sensitivity (95%→70% same-verdict from
+temperature 0→1). Deep-research-agent surveys (arXiv:2506.18096, 2508.12752) and
+the citation-hallucination literature (arXiv:2608.05179, 2605.06635, CiteCheck
+2605.27700) identify the verification gap as the field's open problem.
+
+Thesis: **citation-checking must be mechanical, decomposed, and upstream of the
+judge.** A small NLI model asks the narrow, checkable question — *does THIS passage
+entail THIS claim* — and is free of the judge's biases, deterministic, and cheap.
+
+## 2. The evidence contract
+
+A finding is a discrete `Claim{statement, sources[], verdict, confidence}`
+(FActScore / SAFE / VeriScore atomic-claim approach). Verification is layered,
+cheapest and most reliable first:
+
+1. **deterministic** — numbers, dates, cross-figure consistency (Z3 where needed);
+2. **reference (load-bearing)** — NLI entailment of the claim by the retrieved
+   passage (the ALCE method);
+3. **invariant** — coverage and falsification rules;
+4. **judge (constrained)** — relevance/framing only, temperature 0, *never* trusted
+   to check citations.
+
+The load-bearing idea is that Layer 2 is mechanical and Layer 4 never checks
+citations. For abstractive text a claim is first **decomposed** into atomic,
+verifiable sub-claims (opinion dropped); each atom is checked against the **full**
+evidence set, and the claim is supported when a configurable fraction of its atoms
+are entailed.
+
+Models: NLI = `mDeBERTa-v3-base-mnli-xnli` (multilingual, 3-way) and
+`MiniCheck-DeBERTa-v3-Large` (grounding-tuned, binary — it cannot false-refute);
+decomposer / writer / judge = `gpt-4o-mini`. All runs CPU, in Docker via `uv`.
+
+## 3. Experiment 1 — judges accept mis-citations (GaRAGe)
+
+GaRAGe (Amazon, ACL 2025) pairs claims with human per-citation labels. We take the
+cleanest unit — answer sentences citing exactly one source — and use GaRAGe's own
+labels: 88 real mis-citations (`related-only`: on-topic but does **not** support
+the claim) and 92 genuine citations.
+
+| on 88 mis-citations / 92 genuine | mis-citations **rejected** | genuine **accepted** |
+|---|---|---|
+| mechanical NLI (`mDeBERTa`) | **80%** | 21% |
+| LLM judge (`gpt-4o-mini`) | **5%** | 90% |
+
+The judge accepts 84/88 on-topic-but-unsupportive citations, justifying each by the
+passage's topic ("*Source mentions…*", "*Source confirms…*") — authority bias,
+reproduced on real data. **The judge cannot be trusted to check citations.** But
+naive whole-sentence NLI is over-strict (21% genuine recall): the two fail as
+mirror images, which is the case *for* a layered, tunable contract rather than
+either method alone.
+
+## 4. Experiment 2 — mechanical attribution is a tunable dial
+
+The same 180-item set, varying model / decomposition / evidence scope:
+
+| configuration | mis-cites rejected | genuine accepted |
+|---|---|---|
+| `mDeBERTa`, whole-sentence, cited-only | **80%** | 21% |
+| `mDeBERTa` + decomposition, cited-only | 75% | 28% |
+| `MiniCheck`, whole-sentence, cited-only | 88% | 23% |
+| `MiniCheck` + decomposition, cited-only | 44% | 67% |
+| `MiniCheck` + decomposition + full-evidence | 34% | **74%** |
+| *LLM judge (reference)* | *5%* | *90%* |
+
+Each lever slides one precision/recall frontier monotonically. **The judge sits
+off this frontier** (5%/90%) and cannot be dialled toward rejection. The ablation
+isolates the dominant lever: both models at whole-sentence are strict and
+low-recall (`mDeBERTa` 21%, `MiniCheck` 23%); it is **decomposition**, not the
+model swap, that unlocks recall (`MiniCheck` 23%→67%) — the unit of attribution
+matters more than the checker. The operating
+point is chosen per use: a **citation gate** (keep mis-citations out of a knowledge
+store) wants the high-reject end and abstains on the rest; **answer-groundedness**
+wants the high-recall end. A caveat specific to GaRAGe: its `related-only` label
+means "does not *answer the question*", which diverges from "is the claim
+*grounded*"; the two agree on genuine and blatantly-irrelevant citations and
+diverge on related-only, so no single point reaches high-reject *and* high-accept
+on this benchmark.
+
+## 5. Experiment 3 — routing it into an auto-research pipeline
+
+We add a `grounded` contract check to Orchid's DAG engine: it verifies a writer
+node's claims against its upstream (retrieved) evidence by NLI, and feeds the
+ungrounded sentences into the existing retry/revise loop. A DRA-shaped workflow
+(plan → retrieve → write) has its writer gated by the check.
+
+**Naive wiring fails.** Whole-sentence NLI against raw web-scrape chunks rejects a
+legitimately-grounded brief (grounded 25%→0% `mDeBERTa`, ~12% `MiniCheck`) and the
+revise loop *degrades* the text — because facts are split across chunks and the
+writer synthesises multi-fact sentences spanning them.
+
+**Done right it works.** With decomposition + full-evidence + boilerplate-stripped
+passages:
+
+| grounding check | grounded @0 | after 1 revise | contract |
+|---|---|---|---|
+| naive whole-sentence (`MiniCheck`) | ~12% | — | fail |
+| decompose + full-evidence (`MiniCheck`) | **71%** | **86%** | **fail → pass** |
+
+The check flagged unsupported sentences, the writer corrected them, groundedness
+rose 71%→86%, and the contract flipped fail→pass — Layer-2 measurably improving the
+pipeline.
+
+**Judge gate vs NLI gate, across 6 queries (52 claims).** Scoring every claim both
+ways against the same evidence:
+
+| gate | claims grounded |
+|---|---|
+| NLI (decompose + full-evidence) | 39/52 = **75%** |
+| LLM judge (same evidence) | 46/52 = **88%** |
+
+Of the 13 claims the NLI gate rejected, the judge accepted **12 (92%)**: the GaRAGe
+authority bias, reproduced in the live pipeline. (The pipeline is unlabelled, so
+per-claim ground truth comes from GaRAGe, §3; the pipeline shows the same
+disagreement pattern at scale.)
+
+## 6. The boundary — citation identity
+
+NLI grounding verifies claim *content*, not citation *identity*. A writer can state
+a supported fact and attribute it to a fabricated source (we observed invented
+study names — "JudgeBiasBench", invented authors — in a brief whose *facts* were
+grounded). We add a mechanical check: extract the named sources a brief asserts and
+flag any absent from the retrieved evidence. It catches the invented names while
+clearing the real ones (FairJudge, RAND Corporation), and raised **0** false
+positives across the 6-query batch (whose strict writer did not invent names). It
+is a safeguard that fires on fabrication and stays quiet otherwise — a layer beyond
+NLI, not a replacement.
+
+## 7. Limitations
+
+- **Domain transfer.** Attribution metrics do not transfer across domains
+  (arXiv:2606.23915); GaRAGe is web/news, not idea-validation. An outcome store for
+  on-domain recalibration is required, not optional.
+- **Benchmark label semantics.** GaRAGe's `related-only` ≠ "ungrounded" (§4).
+- **Pipeline labels.** §5's gate comparison is unlabelled; ground truth is §3.
+- **MiniCheck is English-only** — keep `mDeBERTa` as the zh head for bilingual use.
+- **Judge decomposer.** The decomposer is an LLM; it only *extracts* (never sees
+  the source, never decides support), so judge bias cannot re-enter — but it adds
+  token cost to the check.
+
+## 8. Conclusion
+
+Mechanical, decomposed attribution, upstream of the judge, is the right shape for
+citation-checking in agent workflows. It is a tunable precision/recall dial the
+judge cannot reach; it improves a real research pipeline once the unit (atoms, full
+evidence) matches how writers compose; and its boundary — citation identity — is
+itself cheaply checkable. The judge's role is relevance and framing, never
+citations.
+
+## References
+
+AFC survey 2108.11896 · VeriScore 2406.19276 · ALCE · MiniCheck (EMNLP 2024)
+2404.10774 · GaRAGe (ACL 2025) · Deep Research Agents 2506.18096 / 2508.12752 ·
+Verification Gap 2608.05179 · Cited but Not Verified 2605.06635 · CiteCheck
+2605.27700 · Reliability without Validity 2606.19544 · Do LLM Attribution Metrics
+Transfer 2606.23915. See `docs/evidence-contract.md` for the full design note and
+run logs.
