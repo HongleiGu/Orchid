@@ -1,0 +1,96 @@
+{
+  "_comment": "Auto-research workflow tuned to exercise Layer-2 grounding (OR-58). A deep-research-agent shape (plan -> retrieve -> write) where the writer node is gated by a mechanical `grounded` contract check: every claim in the report must be entailed by the retrieved sources (NLI, not an LLM judge). A failing check feeds the ungrounded sentences back as contract_feedback and the writer re-runs (bounded retry) to correct or drop them. This directly targets the citation 'verification gap' that recent deep-research-agent surveys report (11-57% citation-hallucination; commercial DR agents 78-94% citation accuracy). See docs/evidence-contract.md and arXiv:2608.05179, 2605.06635.",
+  "agents": [
+    {
+      "name": "grq_planner",
+      "role": "worker",
+      "model": "openrouter/openai/gpt-4o-mini",
+      "reasoning": false,
+      "system_prompt": "You scope an auto-research question and produce a search plan. Read task params: topic, area. If topic is blank, pick one concrete, answerable question in `area`. Output markdown:\n# Plan\n## Question\n<one concrete question>\n## Search queries\n- A precise query and 3 adjacent queries (one per line), suitable for literature_search with year_from=2025.\n## What a grounded answer needs\n3-6 specific sub-claims the report must establish, each of a kind that a retrieved source could support.",
+      "skills": []
+    },
+    {
+      "name": "grq_retriever",
+      "role": "worker",
+      "model": "openrouter/openai/gpt-4o-mini",
+      "reasoning": false,
+      "system_prompt": "You gather evidence. Call literature_search exactly once using the Plan's queries (query=<precise query>, queries=<the 3 adjacent>, year_from=2025, max_results=12). Do NOT invent papers, numbers, or quotes. Output markdown:\n# Sources\nFor each result, a block:\n### <title> (<year>) <url>\n<the 2-4 sentence passage/abstract snippet returned by the tool, verbatim>\n\nThis block is the evidence the writer must ground every claim in, so copy the returned passages faithfully and do not summarise them away.",
+      "skills": [
+        "@orchid/literature_search"
+      ]
+    },
+    {
+      "name": "grq_writer",
+      "role": "worker",
+      "model": "openrouter/openai/gpt-4o-mini",
+      "reasoning": false,
+      "system_prompt": "You write a short, factual research brief that answers the Plan's Question using ONLY the retrieved Sources in your upstream block. Every sentence must be directly supported by a source passage; do not add outside knowledge, speculation, or embellishment, and do not state figures or claims the sources do not contain. Prefer fewer, well-supported sentences over broad ones.\n\nIf `contract_feedback` is present, it lists sentences a mechanical grounding check found UNSUPPORTED by the sources. Revise: delete each unsupported sentence or rewrite it so it only states what a source passage actually supports. Do not argue with the feedback; fix the text.\n\nOutput markdown:\n# Research brief\n## Answer\n<5-12 sentences, each grounded in a source>\n## Sources used\n<the urls you relied on>",
+      "skills": []
+    }
+  ],
+  "tasks": [
+    {
+      "name": "Auto-research (grounded)",
+      "description": "Plan -> retrieve -> write deep-research pipeline whose writer is gated by a Layer-2 NLI grounding contract with a bounded revise loop.",
+      "workflow_type": "dag",
+      "workflow_config": {
+        "nodes": [
+          {
+            "name": "plan",
+            "agent_name": "grq_planner",
+            "position": {"x": 0, "y": 0}
+          },
+          {
+            "name": "retrieve",
+            "agent_name": "grq_retriever",
+            "position": {"x": 240, "y": 0}
+          },
+          {
+            "name": "write",
+            "agent_name": "grq_writer",
+            "position": {"x": 480, "y": 0},
+            "contract": {
+              "objective": "Every claim in the brief must be entailed by the retrieved sources (grounded attribution, checked mechanically by NLI, not by an LLM judge).",
+              "checks": [
+                {
+                  "type": "grounded",
+                  "sources": ["retrieve"],
+                  "min_grounded": 0.8
+                }
+              ],
+              "on_fail": "retry",
+              "on_blocked": "human_review",
+              "max_retries": 2
+            }
+          }
+        ],
+        "edges": [
+          {"source": "plan", "target": "retrieve"},
+          {"source": "retrieve", "target": "write"}
+        ],
+        "entry": "plan",
+        "auto_save": true
+      },
+      "inputs": {
+        "area": "LLM agents, tool use, reasoning, and reliability (2025-2026)",
+        "topic": ""
+      },
+      "input_schema": [
+        {
+          "name": "area",
+          "type": "string",
+          "label": "Research area",
+          "description": "Domain the planner picks a question from when topic is blank.",
+          "default": "LLM agents, tool use, reasoning, and reliability (2025-2026)"
+        },
+        {
+          "name": "topic",
+          "type": "string",
+          "label": "Topic (optional)",
+          "description": "Leave blank to let the planner choose.",
+          "default": ""
+        }
+      ]
+    }
+  ]
+}

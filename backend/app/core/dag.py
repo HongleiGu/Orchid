@@ -832,6 +832,8 @@ async def _run_contract_check(
     if kind == "needs_external_access":
         reason = str(check.get("reason") or "External access is required before this node can proceed.")
         return _check_result(index, kind, "blocked_needs_external_access", reason)
+    if kind in ("grounded", "attribution"):
+        return await _run_grounding_check(output=output, upstream=upstream, check=check, index=index)
     if kind == "llm_judge":
         return await _run_llm_contract_judge(
             node=node,
@@ -916,6 +918,119 @@ async def _run_llm_contract_judge(
 
 def _check_result(index: int, kind: str, status: str, reason: str) -> dict:
     return {"index": index, "type": kind, "status": status, "reason": reason}
+
+
+# ── Layer-2 grounding contract check (OR-58) ─────────────────────────────────
+# Routes the evidence contract's NLI attribution into the live pipeline: a
+# `grounded` check verifies that the node's claims are entailed by the evidence
+# it was given (its upstream outputs), mechanically — the retrieval-grounded
+# checking layer the deep-research-agent literature prescribes for the citation
+# "verification gap". A failing check feeds the normal retry/revise loop.
+#
+# The backend image has no torch, so NLI runs out-of-process (a sidecar at
+# $EVIDENCE_NLI_URL) or in-process only where torch is present (the evidence
+# env / offline measurement). With neither, the check degrades to a skip-pass so
+# a torch-less deployment is unaffected. Set via set_grounding_verifier() in tests.
+_grounding_verifier: Any = None
+_grounding_verifier_resolved = False
+_SENT_SPLIT = re.compile(r"(?<=[.!?。！？])\s+")
+
+
+def set_grounding_verifier(verifier: Any) -> None:
+    """Inject an NLI verifier (anything with .entail); for tests and for an
+    explicit in-process wiring. Pass None to reset resolution."""
+    global _grounding_verifier, _grounding_verifier_resolved
+    _grounding_verifier = verifier
+    _grounding_verifier_resolved = verifier is not None
+
+
+def _get_grounding_verifier() -> Any:
+    global _grounding_verifier, _grounding_verifier_resolved
+    if _grounding_verifier_resolved:
+        return _grounding_verifier
+    _grounding_verifier_resolved = True
+    url = os.environ.get("EVIDENCE_NLI_URL")
+    if url:
+        try:
+            from app.evidence.nli_client import RemoteNLI
+            _grounding_verifier = RemoteNLI(url)
+            return _grounding_verifier
+        except Exception as exc:  # pragma: no cover - sidecar optional
+            logger.warning("grounding: remote NLI unavailable (%s)", exc)
+            return None
+    import importlib.util
+    if importlib.util.find_spec("torch") is None:
+        logger.info("grounding: torch not installed and no EVIDENCE_NLI_URL — grounding checks skip")
+        return None
+    try:
+        from app.evidence.nli import TransformersNLI
+        _grounding_verifier = TransformersNLI()
+    except Exception as exc:  # pragma: no cover
+        logger.warning("grounding: could not load NLI model (%s)", exc)
+        _grounding_verifier = None
+    return _grounding_verifier
+
+
+def _split_claims(text: str, max_claims: int = 40) -> list[str]:
+    sents = [s.strip() for s in _SENT_SPLIT.split(text or "") if len(s.strip()) >= 25]
+    return sents[:max_claims]
+
+
+def _grounding_sources(output: AgentOutput, upstream: dict[str, AgentOutput],
+                       check: dict, max_chunks: int = 40) -> list[str]:
+    """Evidence passages to ground claims against: upstream node outputs by
+    default (that is the evidence this node was handed), chunked so each premise
+    is NLI-sized. A check may instead name specific upstream nodes."""
+    names = check.get("sources")
+    if isinstance(names, list) and names:
+        texts = [upstream[n].content for n in names if n in upstream and upstream[n].content]
+    else:
+        texts = [v.content for v in upstream.values() if v and v.content]
+    chunks: list[str] = []
+    for t in texts:
+        parts = _SENT_SPLIT.split(t)
+        # group ~3 sentences per chunk to keep context without exceeding NLI len
+        for i in range(0, len(parts), 3):
+            chunk = " ".join(p.strip() for p in parts[i:i + 3]).strip()
+            if chunk:
+                chunks.append(chunk)
+    return chunks[:max_chunks]
+
+
+def _grounding_sync(verifier: Any, claims: list[str], sources: list[str], min_grounded: float) -> dict:
+    from app.evidence.schema import Claim, Source, Verdict
+    from app.evidence.verify import verify_claim
+
+    srcs = [Source(passage=s) for s in sources]
+    ungrounded = []
+    for stmt in claims:
+        c = verify_claim(Claim(statement=stmt, sources=srcs), verifier)
+        if c.verdict != Verdict.SUPPORTED:
+            ungrounded.append(stmt)
+    grounded = len(claims) - len(ungrounded)
+    frac = grounded / len(claims)
+    ok = frac >= min_grounded
+    reason = (f"{grounded}/{len(claims)} claims grounded in {len(sources)} evidence chunks "
+              f"= {frac:.0%} (threshold {min_grounded:.0%}).")
+    if ungrounded:
+        reason += " Ungrounded claims: " + " | ".join(u[:90] for u in ungrounded[:5])
+    return {"ok": ok, "reason": reason}
+
+
+async def _run_grounding_check(output: AgentOutput, upstream: dict[str, AgentOutput],
+                               check: dict, index: int) -> dict:
+    verifier = _get_grounding_verifier()
+    if verifier is None:
+        return _check_result(index, "grounded", "pass",
+                             "Grounding check skipped: no NLI verifier configured (set EVIDENCE_NLI_URL).")
+    claims = _split_claims(output.content or "")
+    sources = _grounding_sources(output, upstream, check)
+    if not claims or not sources:
+        return _check_result(index, "grounded", "pass",
+                             "Grounding check skipped: no claims or no upstream evidence to check against.")
+    min_grounded = float(check.get("min_grounded", 0.8) or 0.8)
+    result = await asyncio.to_thread(_grounding_sync, verifier, claims, sources, min_grounded)
+    return _check_result(index, "grounded", "pass" if result["ok"] else "fail", result["reason"])
 
 
 def _normalize_contract(contract: dict) -> dict:
