@@ -123,10 +123,14 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="python -m app.evidence.eval.run")
     ap.add_argument("--stub", action="store_true", help="use the deterministic StubNLI (offline)")
     ap.add_argument("--model", default=None, help="HF model name for TransformersNLI")
+    ap.add_argument("--minicheck", action="store_true", help="use the MiniCheck grounding-tuned checker instead of mDeBERTa")
     ap.add_argument("--benchmark", default=None, choices=["garage"], help="external benchmark instead of the built-in gold set")
     ap.add_argument("--data", default=None, help="local path to the benchmark file (else auto-download)")
+    ap.add_argument("--full-evidence", action="store_true", help="test atoms against all grounding passages, not just the cited one")
+    ap.add_argument("--max-passages", type=int, default=8, help="cap grounding passages per claim under --full-evidence")
     ap.add_argument("--limit", type=int, default=None, help="cap the number of items (stratified)")
     ap.add_argument("--seed", type=int, default=0, help="sampling seed for --benchmark")
+    ap.add_argument("--support-fraction", type=float, default=None, help="fraction of verifiable atoms that must be entailed (default 0.5)")
     ap.add_argument("--judge", action="store_true", help="also run the LLM-judge baseline (spends tokens; needs a key)")
     ap.add_argument("--judge-stub", action="store_true", help="run the judge baseline against an offline stub (no key)")
     ap.add_argument("--judge-model", default=None, help=f"LLM model for the judge (default: {DEFAULT_JUDGE_MODEL})")
@@ -139,6 +143,10 @@ def main(argv: list[str]) -> int:
     if args.stub:
         from app.evidence.nli import StubNLI
         nli, name = StubNLI(), "StubNLI"
+    elif args.minicheck:
+        from app.evidence.nli import MINICHECK_MODEL, MiniCheckNLI
+        name = args.model or MINICHECK_MODEL
+        nli = MiniCheckNLI(model_name=name)
     else:
         from app.evidence.nli import DEFAULT_MODEL, TransformersNLI
         name = args.model or DEFAULT_MODEL
@@ -156,18 +164,22 @@ def main(argv: list[str]) -> int:
 
     if args.benchmark:
         from app.evidence.eval.benchmarks import LOADERS
-        gold = LOADERS[args.benchmark](path=args.data, limit=args.limit, seed=args.seed)
+        gold = LOADERS[args.benchmark](path=args.data, limit=args.limit, seed=args.seed,
+                                       full_evidence=args.full_evidence, max_passages=args.max_passages)
         source = args.benchmark
     else:
         gold = load_gold()
         source = "goldset"
-    print(f"model: {name}\nbenchmark: {source}\ndecompose: {decomp_name}\ngold items: {len(gold)}\n")
+    ev = "all-grounding" if args.full_evidence else "cited-only"
+    print(f"model: {name}\nbenchmark: {source} ({ev})\ndecompose: {decomp_name}\ngold items: {len(gold)}\n")
 
+    sf_kw = {"support_fraction": args.support_fraction} if args.support_fraction is not None else {}
     t0 = time.time()
     rows = []
     for g in gold:
-        claim = Claim(statement=g["statement"], sources=[Source(passage=g["passage"])])
-        c = verify_claim_decomposed(claim, nli, decomposer) if decomposer else verify_claim(claim, nli)
+        sources = [Source(passage=p) for p in (g.get("passages") or [g["passage"]])]
+        claim = Claim(statement=g["statement"], sources=sources)
+        c = verify_claim_decomposed(claim, nli, decomposer, **sf_kw) if decomposer else verify_claim(claim, nli)
         rows.append((g, c.verdict, c.confidence))
         if args.show_atoms and c.atoms:
             miss = (c.verdict == Verdict.SUPPORTED) != (g["gold"] == "supported")

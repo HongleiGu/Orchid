@@ -80,6 +80,56 @@ class TransformersNLI:
         return self._id2label[idx], float(probs[idx])
 
 
+# Grounding-tuned binary checker (MiniCheck, EMNLP 2024): label 1 = the document
+# supports the claim. Trained precisely on "does this doc support this synthesised
+# claim", so it is robust to the abstraction/paraphrase/multi-fact cases where a
+# generic MNLI model (mDeBERTa) misfires. English-only — keep mDeBERTa for zh.
+MINICHECK_MODEL = "lytang/MiniCheck-DeBERTa-v3-Large"
+
+
+class MiniCheckNLI:
+    """MiniCheck head. Binary (supported / not), so it emits ENTAIL or NEUTRAL and
+    never CONTRADICT — which also sidesteps the false-refutation failure mode that
+    a 3-way MNLI model hits on negation-shaped atoms. Same lazy-load pattern as
+    TransformersNLI; loads with the existing deps (sentencepiece for DeBERTa-v3)."""
+
+    def __init__(self, model_name: str = MINICHECK_MODEL, device: str | None = None,
+                 max_length: int = 512) -> None:
+        self.model_name = model_name
+        self.max_length = max_length
+        self._device = device
+        self._model = None
+        self._tokenizer = None
+
+    def _ensure_loaded(self) -> None:
+        if self._model is not None:
+            return
+        import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        if self._device is None:
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info("Loading MiniCheck model %s on %s", self.model_name, self._device)
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self._model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
+        self._model.to(self._device).eval()
+
+    def entail(self, premise: str, hypothesis: str) -> tuple[EntailmentLabel, float]:
+        import torch
+
+        self._ensure_loaded()
+        # Truncate the document (first segment), keep the whole claim.
+        inputs = self._tokenizer(
+            premise, hypothesis, truncation="only_first", max_length=self.max_length,
+            return_tensors="pt",
+        ).to(self._device)
+        with torch.no_grad():
+            p_support = float(self._model(**inputs).logits.softmax(dim=-1)[0][1])
+        if p_support >= 0.5:
+            return EntailmentLabel.ENTAIL, p_support
+        return EntailmentLabel.NEUTRAL, 1.0 - p_support
+
+
 class StubNLI:
     """Deterministic NLI for tests. Rules, not a model:
 

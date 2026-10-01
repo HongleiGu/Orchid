@@ -66,23 +66,52 @@ def verify_claim(claim: Claim, nli: NLIVerifier) -> Claim:
     return claim
 
 
-def _entail_over_sources(nli: NLIVerifier, claim: Claim, hypothesis: str) -> list[Entailment]:
-    out = []
+def _best_entailment_for(nli: NLIVerifier, claim: Claim, hypothesis: str,
+                         floor: float) -> tuple[Entailment, Entailment | None]:
+    """Check one hypothesis against every source; return (deciding, strongest).
+
+    Early-exits at the first strongly-entailing source, so testing an atom against
+    many grounding passages stays cheap for genuine claims. `deciding` is that
+    entailment, else the strongest contradiction, else the strongest signal seen.
+    """
+    best: Entailment | None = None
+    best_contra: Entailment | None = None
     for i, src in enumerate(claim.sources):
         label, score = nli.entail(src.passage, hypothesis)
-        out.append(Entailment(label=label, score=score, source_index=i))
-    return out
+        e = Entailment(label=label, score=score, source_index=i)
+        if best is None or score > best.score:
+            best = e
+        if label == EntailmentLabel.ENTAIL and score >= floor:
+            return e, e
+        if label == EntailmentLabel.CONTRADICT and score >= floor and (
+            best_contra is None or score > best_contra.score
+        ):
+            best_contra = e
+    return (best_contra or best), best  # type: ignore[return-value]
 
 
-def verify_claim_decomposed(claim: Claim, nli: NLIVerifier, decomposer) -> Claim:
+# How much of a claim must be grounded to call it supported. Strict "all atoms"
+# (=1.0) tanks recall on abstractive, multi-source sentences; a majority is the
+# practical middle. Tunable; OR-60 calibrates it against the outcome store.
+SUPPORT_FRACTION = 0.5
+# A contradiction only flips the verdict to REFUTED when it is strong AND actually
+# dominates the supporting atoms — otherwise a single negation-shaped atom (which
+# a 3-way MNLI model misreads) would wrongly refute a genuine claim.
+REFUTE_FLOOR = 0.9
+
+
+def verify_claim_decomposed(claim: Claim, nli: NLIVerifier, decomposer,
+                            support_fraction: float = SUPPORT_FRACTION,
+                            refute_floor: float = REFUTE_FLOOR) -> Claim:
     """Decompose the statement into atomic claims, verify each verifiable atom
     against the sources with NLI, and aggregate.
 
-    This is the recall fix: an abstractive statement is supported iff every
-    *verifiable* atom is entailed by some source (ALCE-style citation recall at
-    sub-claim granularity); opinion atoms are not graded. A single contradicted
-    atom refutes the claim. With no verifiable atoms (pure opinion), there is
-    nothing to check — fall back to whole-statement verification.
+    Recall-oriented aggregation: a claim is supported when at least
+    `support_fraction` of its *verifiable* atoms are entailed by some source
+    (opinion atoms are not graded); it is refuted only when strong contradictions
+    dominate the supporting atoms; otherwise unsupported. With no verifiable atoms
+    (pure opinion) there is nothing to check — fall back to whole-statement
+    verification.
     """
     if not claim.sources:
         claim.verdict, claim.confidence = Verdict.UNSUPPORTED, 0.0
@@ -93,41 +122,40 @@ def verify_claim_decomposed(claim: Claim, nli: NLIVerifier, decomposer) -> Claim
     if not verifiable:
         return verify_claim(claim, nli)
 
-    flat: list[Entailment] = []
+    decided: list[Entailment] = []
     atom_supported, atom_contradicted = [], []
     for atom in verifiable:
-        ents = _entail_over_sources(nli, claim, atom.text)
-        flat.extend(ents)
-        strong_e = [e for e in ents if e.label == EntailmentLabel.ENTAIL and e.score >= CONFIDENCE_FLOOR]
-        strong_c = [e for e in ents if e.label == EntailmentLabel.CONTRADICT and e.score >= CONFIDENCE_FLOOR]
-        be = max(strong_e, key=lambda e: e.score, default=None)
-        bc = max(strong_c, key=lambda e: e.score, default=None)
-        if be and (not bc or be.score >= bc.score):
-            atom.verdict, atom.confidence = Verdict.SUPPORTED, be.score
+        e, best = _best_entailment_for(nli, claim, atom.text, CONFIDENCE_FLOOR)
+        decided.append(e)
+        if e.label == EntailmentLabel.ENTAIL and e.score >= CONFIDENCE_FLOOR:
+            atom.verdict, atom.confidence = Verdict.SUPPORTED, e.score
             atom_supported.append(atom)
-        elif bc:
-            atom.verdict, atom.confidence = Verdict.REFUTED, bc.score
+        elif e.label == EntailmentLabel.CONTRADICT and e.score >= CONFIDENCE_FLOOR:
+            atom.verdict, atom.confidence = Verdict.REFUTED, e.score
             atom_contradicted.append(atom)
         else:
             atom.verdict = Verdict.UNSUPPORTED
-            top = max(ents, key=lambda e: e.score, default=None)
-            atom.confidence = 1.0 - top.score if top else 0.0
-    claim.entailments = flat
+            atom.confidence = 1.0 - best.score if best else 0.0
+    claim.entailments = decided
 
     supported_is = Verdict.REFUTED if claim.stance == Stance.REFUTE else Verdict.SUPPORTED
     refuted_is = Verdict.SUPPORTED if claim.stance == Stance.REFUTE else Verdict.REFUTED
 
-    if atom_contradicted:
+    n = len(verifiable)
+    n_sup = len(atom_supported)
+    strong_contra = [a for a in atom_contradicted if a.confidence >= refute_floor]
+    frac_sup = n_sup / n
+
+    if strong_contra and len(atom_contradicted) > n_sup:
+        # Contradiction genuinely dominates — not just one misread atom.
         claim.verdict = refuted_is
         claim.confidence = max(a.confidence for a in atom_contradicted)
-    elif len(atom_supported) == len(verifiable):
-        # Every checkable atom is grounded — the claim stands, only as strongly
-        # as its weakest atom.
+    elif frac_sup >= support_fraction:
         claim.verdict = supported_is
-        claim.confidence = min(a.confidence for a in atom_supported)
+        claim.confidence = frac_sup
     else:
         claim.verdict = Verdict.UNSUPPORTED
-        claim.confidence = len(atom_supported) / len(verifiable)
+        claim.confidence = 1.0 - frac_sup
     return claim
 
 

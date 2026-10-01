@@ -48,8 +48,27 @@ def _dataset_path(path: str | None, url: str, filename: str, cache_dir: str | No
     return dest
 
 
+def _grounding_passages(grd: list[dict]) -> list[str]:
+    out = []
+    for i, g in enumerate(grd):
+        p = str((g or {}).get(f"cite_{i+1}", "")).strip()
+        if p:
+            out.append(p)
+    return out
+
+
 def load_garage(path: str | None = None, limit: int | None = None, seed: int = 0,
-                cache_dir: str | None = None) -> list[dict]:
+                cache_dir: str | None = None, full_evidence: bool = False,
+                max_passages: int = 8) -> list[dict]:
+    """Load GaRAGe into the gold shape.
+
+    full_evidence=False (default): each claim is tested only against the single
+    passage it cites — the citation-attribution framing, matching GaRAGe's
+    per-citation label. full_evidence=True: `passages` carries the cited passage
+    plus the record's other grounding passages (capped), so an atom can be grounded
+    anywhere in the retrieved set — the answer-groundedness framing, which lifts
+    the artificial single-passage recall cap but blurs the per-citation label.
+    """
     p = _dataset_path(path, GARAGE_URL, "GaRAGe_benchmark.jsonl", cache_dir)
     genuine: list[dict] = []
     mismatch: list[dict] = []
@@ -60,6 +79,7 @@ def load_garage(path: str | None = None, limit: int | None = None, seed: int = 0
         er = d.get("evidence_relevant") or []
         ec = d.get("evidence_correct") or []
         grd = d.get("grounding") or []
+        all_passages = _grounding_passages(grd) if full_evidence else []
         for sent in _SENT.split(d.get("answer_generate") or ""):
             cites = _CITE.findall(sent)
             if len(cites) != 1:
@@ -82,8 +102,13 @@ def load_garage(path: str | None = None, limit: int | None = None, seed: int = 0
                 bucket, sub, gold = mismatch, "outdated", "unsupported"
             else:
                 continue
-            bucket.append({"statement": statement, "passage": passage, "gold": gold,
-                           "subset": sub, "lang": "en", "source": "garage"})
+            item = {"statement": statement, "passage": passage, "gold": gold,
+                    "subset": sub, "lang": "en", "source": "garage"}
+            if full_evidence:
+                # cited passage first, then the rest of the retrieved set (deduped)
+                others = [q for q in all_passages if q != passage]
+                item["passages"] = [passage, *others][:max_passages]
+            bucket.append(item)
 
     rng = random.Random(seed)
     rng.shuffle(genuine)
