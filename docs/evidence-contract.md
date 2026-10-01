@@ -337,11 +337,30 @@ A `--debug` dump pinned the cause — and it is **not** NLI error:
 This is the GaRAGe lesson reproduced in the pipeline: whole-sentence entailment is
 the wrong unit. The fix is the machinery already built — **atomic decomposition**
 (check each sub-fact, not the combined sentence) + **full-evidence matching**
-(an atom against all chunks, not one window) — plus **cleaner retrieved passages**
-(strip boilerplate; prefer abstracts over scraped HTML). So: Layer-2 improves the
-pipeline only with the decomposition/full-evidence machinery, not as a naive
-sentence-vs-chunk gate. Next: route `verify_claim_decomposed` + full-evidence into
-the `grounded` check and re-measure; clean the retriever's passages.
+(an atom against all chunks, not one window) — plus **cleaner retrieved passages**.
+
+**Upgrade result — done right, Layer-2 does improve the pipeline.** Routing
+`verify_claim_decomposed` + full-evidence into the `grounded` check (MiniCheck,
+boilerplate stripped from passages), same query:
+
+| grounding check | grounded @0 | after 1 NLI-driven revise | contract |
+|---|---|---|---|
+| naive whole-sentence (mDeBERTa) | 25% | 0% | fail → fail |
+| naive whole-sentence (MiniCheck) | ~12% | — | fail |
+| **decompose + full-evidence (MiniCheck)** | **71%** | **86%** | **fail → pass** |
+
+The revise loop now works: the check flagged 2 unsupported sentences, the writer
+dropped/fixed them, groundedness rose 71%→86%, and the contract flipped
+fail→pass. This is the direct answer to "does NLI improve the pipeline": **yes,
+but only with decomposition + full-evidence; the naive sentence-vs-chunk gate
+over-rejects and degrades.**
+
+Known limitation (honest): the check grounds *factual content*, not *citation
+identity* — the final brief still attributes facts to plausibly-confabulated study
+names ("…FairJudge", "…JudgeBiasBench"). Verifying that a named source exists and
+is the one that supports the claim is a separate check (citation-identity /
+retrieval-match), not NLI entailment. That is the next layer, and it is exactly
+the citation-hallucination the deep-research literature flags.
 
 ## Open choices
 
