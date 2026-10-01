@@ -971,6 +971,40 @@ def _get_grounding_verifier() -> Any:
     return _grounding_verifier
 
 
+# Optional claim decomposer: whole-sentence entailment is the wrong unit for
+# synthesised claims (facts split across sources), so we decompose each claim
+# into atoms and ground each atom against the full evidence set. Needs an LLM, so
+# it is only resolved when an API key is in the environment (and never in CI).
+_grounding_decomposer: Any = None
+_grounding_decomposer_resolved = False
+_LLM_KEY_ENVS = ("OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+                 "DEEPSEEK_API_KEY", "GROQ_API_KEY")
+
+
+def set_grounding_decomposer(decomposer: Any) -> None:
+    """Inject (or disable with None) the claim decomposer explicitly; tests call
+    this with None to force the whole-sentence path."""
+    global _grounding_decomposer, _grounding_decomposer_resolved
+    _grounding_decomposer = decomposer
+    _grounding_decomposer_resolved = True
+
+
+def _get_grounding_decomposer() -> Any:
+    global _grounding_decomposer, _grounding_decomposer_resolved
+    if _grounding_decomposer_resolved:
+        return _grounding_decomposer
+    _grounding_decomposer_resolved = True
+    if not any(os.environ.get(k) for k in _LLM_KEY_ENVS):
+        return None  # no LLM reachable (e.g. CI) — fall back to whole-sentence
+    try:
+        from app.evidence.decompose import LLMDecomposer
+        _grounding_decomposer = LLMDecomposer(model=get_settings().llm_default_model)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("grounding: could not build decomposer (%s)", exc)
+        _grounding_decomposer = None
+    return _grounding_decomposer
+
+
 def _split_claims(text: str, max_claims: int = 40) -> list[str]:
     sents = [s.strip() for s in _SENT_SPLIT.split(text or "") if len(s.strip()) >= 25]
     return sents[:max_claims]
@@ -997,17 +1031,25 @@ def _grounding_sources(output: AgentOutput, upstream: dict[str, AgentOutput],
     return chunks[:max_chunks]
 
 
-def _grounding_sync(verifier: Any, claims: list[str], sources: list[str], min_grounded: float) -> dict:
-    from app.evidence.schema import Claim, EntailmentLabel, Source
-    from app.evidence.verify import CONFIDENCE_FLOOR, _best_entailment_for
+def _grounding_sync(verifier: Any, claims: list[str], sources: list[str], min_grounded: float,
+                    decomposer: Any = None, support_fraction: float = 0.5) -> dict:
+    from app.evidence.schema import Claim, EntailmentLabel, Source, Verdict
+    from app.evidence.verify import CONFIDENCE_FLOOR, _best_entailment_for, verify_claim_decomposed
 
-    holder = Claim(statement="", sources=[Source(passage=s) for s in sources])
+    srcs = [Source(passage=s) for s in sources]
+    holder = Claim(statement="", sources=srcs)
     ungrounded: list[str] = []
     for stmt in claims:
-        # Early-exits at the first source chunk that entails the claim, so a
-        # grounded claim costs one NLI call, not one per chunk.
-        deciding, _ = _best_entailment_for(verifier, holder, stmt, CONFIDENCE_FLOOR)
-        grounded = deciding.label == EntailmentLabel.ENTAIL and deciding.score >= CONFIDENCE_FLOOR
+        if decomposer is not None:
+            # Decompose the (possibly multi-fact) claim into atoms and ground each
+            # atom against the full evidence set — early-exits per atom per chunk.
+            c = verify_claim_decomposed(Claim(statement=stmt, sources=srcs), verifier,
+                                        decomposer, support_fraction=support_fraction)
+            grounded = c.verdict == Verdict.SUPPORTED
+        else:
+            # Whole-sentence fallback: first chunk that entails the whole claim.
+            deciding, _ = _best_entailment_for(verifier, holder, stmt, CONFIDENCE_FLOOR)
+            grounded = deciding.label == EntailmentLabel.ENTAIL and deciding.score >= CONFIDENCE_FLOOR
         if not grounded:
             ungrounded.append(stmt)
     n_grounded = len(claims) - len(ungrounded)
@@ -1031,7 +1073,10 @@ async def _run_grounding_check(output: AgentOutput, upstream: dict[str, AgentOut
         return _check_result(index, "grounded", "pass",
                              "Grounding check skipped: no claims or no upstream evidence to check against.")
     min_grounded = float(check.get("min_grounded", 0.8) or 0.8)
-    result = await asyncio.to_thread(_grounding_sync, verifier, claims, sources, min_grounded)
+    decomposer = _get_grounding_decomposer() if check.get("decompose", True) else None
+    support_fraction = float(check.get("support_fraction", 0.5) or 0.5)
+    result = await asyncio.to_thread(_grounding_sync, verifier, claims, sources,
+                                     min_grounded, decomposer, support_fraction)
     out = _check_result(index, "grounded", "pass" if result["ok"] else "fail", result["reason"])
     out["fraction"] = result["fraction"]
     out["ungrounded"] = result["ungrounded"]

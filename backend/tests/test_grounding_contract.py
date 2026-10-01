@@ -17,8 +17,10 @@ from app.evidence.nli import StubNLI
 @pytest.fixture(autouse=True)
 def _stub_verifier():
     dag.set_grounding_verifier(StubNLI())
+    dag.set_grounding_decomposer(None)  # force whole-sentence path (no LLM in tests)
     yield
     dag.set_grounding_verifier(None)
+    dag._grounding_decomposer_resolved = False
 
 
 def _out(content: str) -> AgentOutput:

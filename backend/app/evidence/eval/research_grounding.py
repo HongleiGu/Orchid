@@ -19,7 +19,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import sys
+
+_BOILERPLATE = ("Back to arXiv", "arXiv logo", "Learn more", "Frequently Asked Questions",
+                "License: CC BY", "Blog/", "Research")
+
+
+def _clean(text: str) -> str:
+    """Strip scrape boilerplate so the writer and the grounding check see real
+    prose, not nav/markdown fragments (the raw web-chunk problem)."""
+    text = re.sub(r"#+\s*", "", text or "")
+    for bad in _BOILERPLATE:
+        text = text.replace(bad, " ")
+    return re.sub(r"\s+", " ", text).strip()
 
 from app.core import dag
 from app.core.types import AgentOutput
@@ -40,9 +53,9 @@ def retrieve(query: str, k: int) -> list[str]:
     res = client.search(query, max_results=k, search_depth="advanced")
     out = []
     for r in res.get("results", []):
-        c = (r.get("content") or "").strip()
+        c = _clean(r.get("content") or "")
         if c:
-            out.append(f"{r.get('title','')} — {c}")
+            out.append(f"{_clean(r.get('title',''))} — {c}")
     return out
 
 
@@ -78,6 +91,7 @@ async def main(argv: list[str]) -> int:
     ap.add_argument("--max-revises", type=int, default=2)
     ap.add_argument("--minicheck", action="store_true", help="use MiniCheck as the grounding verifier")
     ap.add_argument("--debug", action="store_true", help="dump source chunks + per-claim entailment scores")
+    ap.add_argument("--no-decompose", action="store_true", help="whole-sentence grounding (disable atomic decomposition)")
     ap.add_argument("--nli-model", default=None, help="NLI model/path (hub id or local)")
     args = ap.parse_args(argv)
 
@@ -90,7 +104,15 @@ async def main(argv: list[str]) -> int:
         dag.set_grounding_verifier(TransformersNLI(model_name=args.nli_model or DEFAULT_MODEL))
         nli_name = args.nli_model or DEFAULT_MODEL
 
-    print(f"query : {args.query}\nwriter: {args.model}\nnli   : {nli_name}\n")
+    if args.no_decompose:
+        dag.set_grounding_decomposer(None)
+        decomp = "off (whole-sentence)"
+    else:
+        from app.evidence.decompose import LLMDecomposer
+        dag.set_grounding_decomposer(LLMDecomposer(model=args.model))
+        decomp = f"on ({args.model})"
+
+    print(f"query : {args.query}\nwriter: {args.model}\nnli   : {nli_name}\ndecompose: {decomp}\n")
     sources = retrieve(args.query, args.k)
     print(f"retrieved {len(sources)} sources\n")
     if not sources:
