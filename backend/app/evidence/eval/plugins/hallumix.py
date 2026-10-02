@@ -17,14 +17,15 @@ from app.evidence.eval.plugins.base import EvalItem, register
 
 _CTX = ("documents", "context", "docs", "passages", "sources", "evidence")
 _CLAIM = ("claim", "answer", "response", "hypothesis", "statement", "output")
-_LABEL = ("label", "is_hallucination", "hallucination", "faithful", "gold")
+_LABEL = ("hallucination_label", "is_hallucination", "hallucination", "label", "faithful", "gold")
 
 
 def _records(data_dir: str) -> list[dict]:
     d = pathlib.Path(data_dir)
     out: list[dict] = []
     for p in list(d.glob("*.jsonl")):
-        out += [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+        # split on \n only: document text contains U+2028/U+2029 which splitlines() would break on
+        out += [json.loads(l) for l in p.read_text(encoding="utf-8").split("\n") if l.strip()]
     for p in list(d.glob("*.json")):
         data = json.loads(p.read_text(encoding="utf-8"))
         out += data if isinstance(data, list) else [data]

@@ -63,12 +63,21 @@ def test_ragtruth_parses_synthetic(tmp_path):
     assert "Paris" in items["r1"].context[0]
 
 
-def test_tofueval_parses_synthetic(tmp_path):
-    (tmp_path / "x.jsonl").write_text(
-        json.dumps({"document": "The meeting approved the budget.", "sentence": "The budget was approved.",
-                    "label": "factual"}) + "\n"
-        + json.dumps({"document": "The meeting approved the budget.", "sentence": "The budget was rejected.",
-                      "label": "not_factual"}) + "\n",
+def test_tofueval_parses_csv_with_docs(tmp_path):
+    (tmp_path / "docs.json").write_text(json.dumps({"d1": "The meeting approved the budget."}), encoding="utf-8")
+    (tmp_path / "meetingbank_factual_eval_test.csv").write_text(
+        "doc_id,annotation_id,summ_sent,sent_label,type\n"
+        "d1,1,The budget was approved.,yes,\n"
+        "d1,2,The budget was rejected.,no,Extrinsic Information\n",
         encoding="utf-8")
     golds = sorted(it.gold for it in get_plugin("tofueval").load(data_dir=str(tmp_path)))
     assert golds == [False, True]
+
+
+def test_tofueval_requires_docs(tmp_path):
+    (tmp_path / "x_factual_eval_test.csv").write_text("doc_id,summ_sent,sent_label\nd1,x,yes\n", encoding="utf-8")
+    try:
+        get_plugin("tofueval").load(data_dir=str(tmp_path))
+        assert False, "should require docs.json"
+    except FileNotFoundError as e:
+        assert "docs.json" in str(e)

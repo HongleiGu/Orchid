@@ -18,7 +18,8 @@ from app.evidence.eval.plugins.base import EvalItem, register
 
 
 def _read_jsonl(path: pathlib.Path) -> list[dict]:
-    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    # split on \n only (text may contain U+2028/U+2029 that splitlines() breaks on)
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").split("\n") if l.strip()]
 
 
 def _context_of(src: dict) -> list[str]:
