@@ -129,6 +129,24 @@ class MiniCheckNLI:
             return EntailmentLabel.ENTAIL, p_support
         return EntailmentLabel.NEUTRAL, 1.0 - p_support
 
+    def support_scores(self, premises: list[str], hypothesis: str, batch_size: int = 16) -> list[float]:
+        """P(premise supports hypothesis) for each premise, in batched forward
+        passes — far faster on CPU than one call per premise."""
+        import torch
+
+        self._ensure_loaded()
+        out: list[float] = []
+        for i in range(0, len(premises), batch_size):
+            batch = premises[i:i + batch_size]
+            inputs = self._tokenizer(
+                batch, [hypothesis] * len(batch), truncation="only_first",
+                max_length=self.max_length, padding=True, return_tensors="pt",
+            ).to(self._device)
+            with torch.no_grad():
+                probs = self._model(**inputs).logits.softmax(dim=-1)[:, 1]
+            out.extend(float(x) for x in probs)
+        return out
+
 
 class StubNLI:
     """Deterministic NLI for tests. Rules, not a model:

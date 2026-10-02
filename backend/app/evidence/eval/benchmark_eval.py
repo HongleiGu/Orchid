@@ -30,6 +30,26 @@ def _grounding_scorer(verifier, decomposer, support_fraction: float = 0.5, max_c
     return score
 
 
+def _nli_batch_scorer(verifier, max_chunks: int = 8) -> Scorer:
+    """Fast whole-sentence NLI: batch all of a claim's evidence chunks into one
+    forward pass and take the max support probability. Needs a verifier with
+    support_scores (MiniCheck)."""
+    from app.evidence.grounding import chunk_sources, numbers_supported
+    from app.evidence.verify import CONFIDENCE_FLOOR
+
+    def score(claim: str, context: list[str]) -> tuple[bool, float]:
+        chunks = chunk_sources(context, max_chunks=max_chunks)
+        if not chunks:
+            return False, 0.0
+        p = float(max(verifier.support_scores(chunks, claim)))
+        grounded = p >= CONFIDENCE_FLOOR
+        if grounded and not numbers_supported(claim, " ".join(context)):
+            grounded, p = False, min(p, 0.49)       # numeric guard parity
+        return grounded, p
+
+    return score
+
+
 def _judge_scorer(model: str) -> Scorer:
     from app.evidence.judge import LLMJudge
     judge = LLMJudge(model=model)
@@ -70,6 +90,8 @@ def build_scorer(args) -> Scorer:
     else:
         from app.evidence.nli import DEFAULT_MODEL, TransformersNLI
         verifier = TransformersNLI(model_name=args.nli_model or DEFAULT_MODEL)
+    if args.scorer == "nli" and hasattr(verifier, "support_scores"):
+        return _nli_batch_scorer(verifier, max_chunks=getattr(args, "max_chunks", 8))
     decomposer = None
     if args.scorer == "grounding" and not args.no_decompose:
         from app.evidence.decompose import LLMDecomposer
