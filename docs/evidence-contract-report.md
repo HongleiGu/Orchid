@@ -62,6 +62,40 @@ Models: NLI = `mDeBERTa-v3-base-mnli-xnli` (multilingual, 3-way) and
 `MiniCheck-DeBERTa-v3-Large` (grounding-tuned, binary — it cannot false-refute);
 decomposer / writer / judge = `gpt-4o-mini`. All runs CPU, in Docker via `uv`.
 
+## 2.1 Positioning: an agentic gate, not an offline metric
+
+The decompose-then-verify line this builds on — FActScore, SAFE, VeriScore,
+DnDScore, MiniCheck, TriQua — is **offline, single-pass evaluation**: a verifier
+scores a *fixed* piece of generated text post-hoc and reports a number (with
+fine-grained annotations). We route the same mechanical attribution into an
+**agentic workflow as a control-flow contract**. That is not a packaging
+difference; it changes what the verifier is and what matters about it:
+
+1. **Verdict is a control signal, not a score.** A failing check drives the
+   workflow — revise with the ungrounded sentences as feedback, back off to a
+   coarser granularity, or abstain/escalate. So *actionability* (which claims
+   failed), *determinism*, and *latency* are first-class requirements, not
+   reporting niceties.
+2. **Evidence is produced in-workflow.** Grounding is against what a cooperating
+   retrieval node actually gathered, so a failure is attributable (bad retrieval
+   vs. bad writing) and the loop can re-retrieve or re-write — where an offline
+   metric is handed a fixed corpus.
+3. **The loop mutates the artifact**, which raises concerns an evaluator never
+   faces: loop monotonicity (a revise can *regress*, §5 — hence a keep-best
+   policy), gaming the checker, and oscillation.
+4. **Errors compound downstream.** A biased gate (the LLM judge, §3) does not just
+   mis-score — it lets ungrounded content propagate to later nodes and compound.
+   "Judges are biased" is a caveat for an evaluator; for a gate it is a
+   control-safety property.
+5. **Online cost is binding.** The gate runs inline, per node, per retry — so the
+   faithfulness round-trip, numeric guard and NLI all have to be cheap (early-exit,
+   a sidecar), where offline evaluation can decompose lavishly.
+
+This reframes several "limitations" of the offline line (it measures but cannot
+fix; it assumes given evidence) as artifacts of the evaluation setting that the
+agentic framing dissolves — while surfacing new problems (loop dynamics,
+checker-gaming) that are ours to own.
+
 ## 3. Experiment 1 — judges accept mis-citations (GaRAGe)
 
 GaRAGe (Amazon, ACL 2025) pairs claims with human per-citation labels. We take the
