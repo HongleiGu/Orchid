@@ -13,18 +13,45 @@ from typing import Any
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?。！？])\s+")
 
+# Scrape boilerplate that pollutes retrieved "content": nav, bylines, site chrome.
+# Grounding against these fragments is the garbage-in failure that sinks recall.
+_BOILERPLATE = re.compile(
+    r"(back to arxiv|arxiv logo|learn more|frequently asked questions|license:\s*cc\b"
+    r"|cookie|subscribe|sign in|all rights reserved|read more|share this|related articles"
+    r"|^\s*by\s+[A-Z][a-z]+(\s+[A-Z][a-z]+)?\s*$)",
+    re.I,
+)
+_DATE_ONLY = re.compile(r"^\s*((january|february|march|april|may|june|july|august|september|october"
+                        r"|november|december)\s+\d{1,2},?\s*\d{0,4}|\d{4}-\d{2}-\d{2})\s*$", re.I)
+
+
+def clean_evidence(text: str) -> str:
+    """Strip markdown/scrape boilerplate so grounding sees prose, not site chrome.
+    Conservative: drops header marks, boilerplate and date/byline lines, then
+    collapses whitespace — keeps anything that looks like a real sentence."""
+    kept: list[str] = []
+    for line in (text or "").splitlines():
+        s = re.sub(r"^#+\s*", "", line).strip()      # markdown headers -> plain
+        if not s or _BOILERPLATE.search(s) or _DATE_ONLY.match(s):
+            continue
+        # drop very short non-sentence fragments (nav items, list bullets)
+        if len(s) < 25 and not re.search(r"[.!?。！？]", s):
+            continue
+        kept.append(s)
+    return re.sub(r"\s+", " ", " ".join(kept)).strip()
+
 
 def split_claims(text: str, max_claims: int = 40) -> list[str]:
     sents = [s.strip() for s in _SENT_SPLIT.split(text or "") if len(s.strip()) >= 25]
     return sents[:max_claims]
 
 
-def chunk_sources(texts: list[str], max_chunks: int = 40, group: int = 3) -> list[str]:
+def chunk_sources(texts: list[str], max_chunks: int = 40, group: int = 3, clean: bool = True) -> list[str]:
     """Chunk evidence texts into ~`group`-sentence windows so each NLI premise is
-    model-sized."""
+    model-sized. Cleans scrape boilerplate first (disable with clean=False)."""
     chunks: list[str] = []
     for t in texts:
-        parts = _SENT_SPLIT.split(t or "")
+        parts = _SENT_SPLIT.split(clean_evidence(t) if clean else (t or ""))
         for i in range(0, len(parts), group):
             chunk = " ".join(p.strip() for p in parts[i:i + group]).strip()
             if chunk:
