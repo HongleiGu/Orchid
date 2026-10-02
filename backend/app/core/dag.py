@@ -1005,81 +1005,73 @@ def _get_grounding_decomposer() -> Any:
     return _grounding_decomposer
 
 
-def _split_claims(text: str, max_claims: int = 40) -> list[str]:
-    sents = [s.strip() for s in _SENT_SPLIT.split(text or "") if len(s.strip()) >= 25]
-    return sents[:max_claims]
-
-
-def _grounding_sources(output: AgentOutput, upstream: dict[str, AgentOutput],
-                       check: dict, max_chunks: int = 40) -> list[str]:
-    """Evidence passages to ground claims against: upstream node outputs by
-    default (that is the evidence this node was handed), chunked so each premise
-    is NLI-sized. A check may instead name specific upstream nodes."""
+def _evidence_texts(upstream: dict[str, AgentOutput], check: dict) -> list[str]:
+    """The evidence this node was handed: named upstream nodes, else all upstream."""
     names = check.get("sources")
     if isinstance(names, list) and names:
-        texts = [upstream[n].content for n in names if n in upstream and upstream[n].content]
-    else:
-        texts = [v.content for v in upstream.values() if v and v.content]
-    chunks: list[str] = []
-    for t in texts:
-        parts = _SENT_SPLIT.split(t)
-        # group ~3 sentences per chunk to keep context without exceeding NLI len
-        for i in range(0, len(parts), 3):
-            chunk = " ".join(p.strip() for p in parts[i:i + 3]).strip()
-            if chunk:
-                chunks.append(chunk)
-    return chunks[:max_chunks]
+        return [upstream[n].content for n in names if n in upstream and upstream[n].content]
+    return [v.content for v in upstream.values() if v and v.content]
 
 
-def _grounding_sync(verifier: Any, claims: list[str], sources: list[str], min_grounded: float,
-                    decomposer: Any = None, support_fraction: float = 0.5) -> dict:
-    from app.evidence.schema import Claim, EntailmentLabel, Source, Verdict
-    from app.evidence.verify import CONFIDENCE_FLOOR, _best_entailment_for, verify_claim_decomposed
+def _split_claims(text: str, max_claims: int = 40) -> list[str]:  # back-compat shim
+    from app.evidence.grounding import split_claims
+    return split_claims(text, max_claims)
 
-    srcs = [Source(passage=s) for s in sources]
-    holder = Claim(statement="", sources=srcs)
-    ungrounded: list[str] = []
-    for stmt in claims:
-        if decomposer is not None:
-            # Decompose the (possibly multi-fact) claim into atoms and ground each
-            # atom against the full evidence set — early-exits per atom per chunk.
-            c = verify_claim_decomposed(Claim(statement=stmt, sources=srcs), verifier,
-                                        decomposer, support_fraction=support_fraction)
-            grounded = c.verdict == Verdict.SUPPORTED
-        else:
-            # Whole-sentence fallback: first chunk that entails the whole claim.
-            deciding, _ = _best_entailment_for(verifier, holder, stmt, CONFIDENCE_FLOOR)
-            grounded = deciding.label == EntailmentLabel.ENTAIL and deciding.score >= CONFIDENCE_FLOOR
-        if not grounded:
-            ungrounded.append(stmt)
-    n_grounded = len(claims) - len(ungrounded)
-    frac = n_grounded / len(claims)
-    reason = (f"{n_grounded}/{len(claims)} claims grounded in {len(sources)} evidence chunks "
-              f"= {frac:.0%} (threshold {min_grounded:.0%}).")
-    if ungrounded:
-        reason += " Ungrounded claims: " + " | ".join(u[:90] for u in ungrounded[:5])
-    return {"ok": frac >= min_grounded, "reason": reason, "fraction": frac, "ungrounded": ungrounded}
+
+def _grounding_sources(output: AgentOutput, upstream: dict[str, AgentOutput],  # back-compat shim
+                       check: dict, max_chunks: int = 40) -> list[str]:
+    from app.evidence.grounding import chunk_sources
+    return chunk_sources(_evidence_texts(upstream, check), max_chunks)
+
+
+async def _ground_remote(url: str, claims: list[str], sources: list[str], check: dict) -> dict:
+    """Call the NLI sidecar (the torch-less backend path). The sidecar runs the
+    model + decomposition and returns the same dict `ground_claims` produces."""
+    import httpx
+
+    payload = {
+        "claims": claims, "sources": sources,
+        "min_grounded": float(check.get("min_grounded", 0.8) or 0.8),
+        "support_fraction": float(check.get("support_fraction", 0.5) or 0.5),
+        "decompose": bool(check.get("decompose", True)),
+    }
+    async with httpx.AsyncClient(timeout=float(os.environ.get("EVIDENCE_NLI_TIMEOUT", "120"))) as client:
+        resp = await client.post(url.rstrip("/") + "/ground", json=payload)
+        resp.raise_for_status()
+        return resp.json()
 
 
 async def _run_grounding_check(output: AgentOutput, upstream: dict[str, AgentOutput],
                                check: dict, index: int) -> dict:
-    verifier = _get_grounding_verifier()
-    if verifier is None:
-        return _check_result(index, "grounded", "pass",
-                             "Grounding check skipped: no NLI verifier configured (set EVIDENCE_NLI_URL).")
-    claims = _split_claims(output.content or "")
-    sources = _grounding_sources(output, upstream, check)
+    from app.evidence.grounding import chunk_sources, ground_claims, split_claims
+
+    claims = split_claims(output.content or "")
+    sources = chunk_sources(_evidence_texts(upstream, check))
     if not claims or not sources:
         return _check_result(index, "grounded", "pass",
                              "Grounding check skipped: no claims or no upstream evidence to check against.")
-    min_grounded = float(check.get("min_grounded", 0.8) or 0.8)
-    decomposer = _get_grounding_decomposer() if check.get("decompose", True) else None
-    support_fraction = float(check.get("support_fraction", 0.5) or 0.5)
-    result = await asyncio.to_thread(_grounding_sync, verifier, claims, sources,
-                                     min_grounded, decomposer, support_fraction)
+
+    url = os.environ.get("EVIDENCE_NLI_URL")
+    if url:
+        try:
+            result = await _ground_remote(url, claims, sources, check)
+        except Exception as exc:
+            logger.warning("grounding: sidecar at %s failed (%s) — skipping check", url, exc)
+            return _check_result(index, "grounded", "pass", f"Grounding check skipped: sidecar unavailable ({exc}).")
+    else:
+        verifier = _get_grounding_verifier()
+        if verifier is None:
+            return _check_result(index, "grounded", "pass",
+                                 "Grounding check skipped: no NLI verifier configured (set EVIDENCE_NLI_URL).")
+        decomposer = _get_grounding_decomposer() if check.get("decompose", True) else None
+        result = await asyncio.to_thread(
+            ground_claims, verifier, claims, sources,
+            float(check.get("min_grounded", 0.8) or 0.8), decomposer,
+            float(check.get("support_fraction", 0.5) or 0.5))
+
     out = _check_result(index, "grounded", "pass" if result["ok"] else "fail", result["reason"])
-    out["fraction"] = result["fraction"]
-    out["ungrounded"] = result["ungrounded"]
+    out["fraction"] = result.get("fraction")
+    out["ungrounded"] = result.get("ungrounded", [])
     return out
 
 

@@ -22,6 +22,10 @@ services:
       APP_CORS_ORIGINS: "${APP_CORS_ORIGINS:-http://localhost:3000}"
       VAULT_DIR: /app/vault
       STATE_DIR: /app/data/state
+      # Evidence grounding contract check offloads NLI to the evidence-nli
+      # sidecar (the backend image is torch-free). Empty = grounding checks skip.
+      # Set to http://evidence-nli:8900 in .env and run the `evidence` profile.
+      EVIDENCE_NLI_URL: "${EVIDENCE_NLI_URL:-}"
       # Marketplace installs shell out to npm at runtime (marketplace/service.py)
       # and walk NPM_REGISTRIES in order — mirrors must be set here, not just at
       # build. The single-value vars are the first entry of their chain.
@@ -184,6 +188,38 @@ services:
     command: daemon
     restart: unless-stopped
 
+  # ── Evidence NLI sidecar (Layer-2 grounding contract check) ──────────────────
+  # Runs torch + the NLI model so the backend image stays torch-free. Opt-in
+  # (heavy image, ~GB). Enable with COMPOSE_PROFILES=...,evidence and set
+  # EVIDENCE_NLI_URL=http://evidence-nli:8900 in .env so the backend uses it.
+  # Uses the venv python directly (not `uv run`) because the source is mounted
+  # read-only and `uv run` would try to rebuild the project into it.
+  evidence-nli:
+    profiles: ["evidence"]
+    build:
+      context: .
+      dockerfile: Dockerfile.evidence
+    command: ["/opt/venv/bin/python", "-m", "uvicorn", "app.evidence.service:app",
+              "--host", "0.0.0.0", "--port", "8900"]
+    environment:
+      EVIDENCE_NLI_KIND: "${EVIDENCE_NLI_KIND:-transformers}"
+      EVIDENCE_NLI_MODEL: "${EVIDENCE_NLI_MODEL:-}"
+      EVIDENCE_DECOMPOSE: "${EVIDENCE_DECOMPOSE:-1}"
+      HF_HOME: /root/.cache/huggingface
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app/backend:ro
+      - orchid_hf:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "/opt/venv/bin/python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8900/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+
   # ── PostgreSQL ────────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
@@ -218,3 +254,4 @@ services:
 
 volumes:
   postgres_data:
+  orchid_hf:        # HuggingFace model cache for the evidence-nli sidecar
