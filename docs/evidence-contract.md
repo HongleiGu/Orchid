@@ -362,6 +362,31 @@ is the one that supports the claim is a separate check (citation-identity /
 retrieval-match), not NLI entailment. That is the next layer, and it is exactly
 the citation-hallucination the deep-research literature flags.
 
+### Shipping the gate: deployment + flywheel (2026-10-02)
+
+The verification research became a deployable product gate. Three pieces:
+
+- **NLI sidecar** (`app/evidence/service.py`, compose `evidence-nli`, profile-gated):
+  the backend image stays torch-free; the sidecar loads the model and serves
+  `POST /ground`. The `grounded` check routes to `$EVIDENCE_NLI_URL` (httpx) and
+  **skips gracefully** if the sidecar is down. The grounding computation is a
+  dep-free `app/evidence/grounding.py` shared by both. Verified end-to-end in
+  Docker (health up, `/ground` loads mDeBERTa, fabricated claim rejected).
+- **Clean retrieval** (`grounding.clean_evidence`): strips scrape boilerplate
+  (nav, bylines, dates, markdown chrome) before NLI — the garbage-in that sank
+  recall — on by default in `chunk_sources`.
+- **Outcome store + calibration** (`app/evidence/outcomes.py`,
+  `calibration.py`): every grounding decision records a per-claim
+  `(confidence, predicted)` observation (append-only JSONL, `$EVIDENCE_OUTCOME_STORE`);
+  reconciling it against reality feeds Brier/ECE and a **suggested abstention
+  threshold** (max coverage s.t. selective risk ≤ target). Thresholds are now
+  *fit on on-domain data*, not guessed — mandatory because attribution metrics
+  don't transfer. View with `python -m app.evidence.eval.calibration_report`.
+
+Still open for full product: L3 invariants, the constrained L4 judge, a zh NLI
+head (MiniCheck is English-only), a Postgres outcome-store table (behind the same
+interface), reconciliation signal/UI, and the C discover/validate loop.
+
 ## Open choices
 
 - Validation dimensions — is **demand / competition / willingness-to-pay /
