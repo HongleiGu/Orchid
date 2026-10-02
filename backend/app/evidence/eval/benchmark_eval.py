@@ -17,11 +17,11 @@ from app.evidence.eval.plugins.base import EvalItem, Scorer
 from app.evidence.eval.plugins.metrics import evaluate
 
 
-def _grounding_scorer(verifier, decomposer, support_fraction: float = 0.5) -> Scorer:
+def _grounding_scorer(verifier, decomposer, support_fraction: float = 0.5, max_chunks: int = 8) -> Scorer:
     from app.evidence.grounding import chunk_sources, ground_claims
 
     def score(claim: str, context: list[str]) -> tuple[bool, float]:
-        res = ground_claims(verifier, [claim], chunk_sources(context),
+        res = ground_claims(verifier, [claim], chunk_sources(context, max_chunks=max_chunks),
                             decomposer=decomposer, support_fraction=support_fraction)
         d = res["details"][0]
         p_faithful = d["confidence"] if d["grounded"] else 1.0 - d["confidence"]
@@ -74,7 +74,8 @@ def build_scorer(args) -> Scorer:
     if args.scorer == "grounding" and not args.no_decompose:
         from app.evidence.decompose import LLMDecomposer
         decomposer = LLMDecomposer(model=args.model)
-    return _grounding_scorer(verifier, decomposer, args.support_fraction)
+    return _grounding_scorer(verifier, decomposer, args.support_fraction,
+                             max_chunks=getattr(args, "max_chunks", 8))
 
 
 def run(items: list[EvalItem], scorer: Scorer) -> dict:
@@ -104,6 +105,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--nli-model", default=None)
     ap.add_argument("--no-decompose", action="store_true")
     ap.add_argument("--support-fraction", type=float, default=0.5)
+    ap.add_argument("--max-chunks", type=int, default=8, help="cap evidence chunks per claim (bounds NLI cost)")
     ap.add_argument("--model", default="openrouter/openai/gpt-4o-mini")
     args = ap.parse_args(argv)
 

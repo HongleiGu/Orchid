@@ -35,6 +35,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--nli-model", default=None)
     ap.add_argument("--no-decompose", action="store_true")
     ap.add_argument("--support-fraction", type=float, default=0.5)
+    ap.add_argument("--max-chunks", type=int, default=8, help="cap evidence chunks per claim (bounds NLI cost)")
     ap.add_argument("--model", default="openrouter/openai/gpt-4o-mini")
     args = ap.parse_args(argv)
 
