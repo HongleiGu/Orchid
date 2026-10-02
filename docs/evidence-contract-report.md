@@ -96,6 +96,28 @@ fix; it assumes given evidence) as artifacts of the evaluation setting that the
 agentic framing dissolves — while surfacing new problems (loop dynamics,
 checker-gaming) that are ours to own.
 
+**We are not first into the agentic setting, and should not claim to be.** Two
+neighbouring lines are active. (i) *Contract-gated agent governance* — ToolGate's
+Hoare-style pre/postconditions on tool calls, AgentSpec, proof-carrying actions,
+provenance guardrails — but these gate *actions, policy and data-flow*, not the
+*epistemic status of claims*. (ii) *Externally-grounded verification in loops* —
+e.g. work showing self-evaluation in agent loops degenerates to accept-all and
+must be replaced by an out-of-band verifier (arXiv:2607.25152), and the common
+"external groundedness check, loop fires on fail" RAG pattern — establishing the
+*principle* we also rely on. But their external verifier is a world-state oracle
+for software-engineering agents (observable test-pass); NLI-as-grounding in agent
+runtime verification already exists too. So neither the contract framing, the
+external-grounding principle, nor the revise-loop shape is novel.
+
+Our contribution is the **intersection** none of them occupies: mechanical,
+*judge-free*, *claim-level* attribution as the external grounding for epistemic
+claims — where no world-state oracle exists (research findings, prose), the oracle
+is NLI against retrieved evidence, decomposed, faithfulness- and numeric-guarded,
+with a **calibrated abstention threshold** — together with the empirical
+judge-authority-bias result (§3) that says *why* the external verifier must be
+mechanical, and formal routing for math. Others argue "use external grounding"; we
+supply the grounding mechanism for claims and show the LLM judge cannot be it.
+
 ## 3. Experiment 1 — judges accept mis-citations (GaRAGe)
 
 GaRAGe (Amazon, ACL 2025) pairs claims with human per-citation labels. We take the
@@ -218,5 +240,12 @@ AFC survey 2108.11896 · VeriScore 2406.19276 · ALCE · MiniCheck (EMNLP 2024)
 2404.10774 · GaRAGe (ACL 2025) · Deep Research Agents 2506.18096 / 2508.12752 ·
 Verification Gap 2608.05179 · Cited but Not Verified 2605.06635 · CiteCheck
 2605.27700 · Reliability without Validity 2606.19544 · Do LLM Attribution Metrics
-Transfer 2606.23915. See `docs/evidence-contract.md` for the full design note and
-run logs.
+Transfer 2606.23915 · TriQua 2608.05228 · DnDScore 2412.13175.
+
+*Agentic-verification neighbours (positioned against in §2.1):* ToolGate
+(contract-gated tool execution) 2026.findings-acl.470 · Proof-Carrying Agent
+Actions 2606.04104 · Agent Traces to Trust (provenance) 2606.04990 · Provenance
+Integrity 2608.12761 · Externally-grounded verification in agent loops 2607.25152 ·
+Reviewer precision ≠ critique uptake 2607.15388.
+
+See `docs/evidence-contract.md` for the full design note and run logs.
