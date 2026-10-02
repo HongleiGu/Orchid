@@ -51,7 +51,10 @@ def chunk_sources(texts: list[str], max_chunks: int = 40, group: int = 3, clean:
     model-sized. Cleans scrape boilerplate first (disable with clean=False)."""
     chunks: list[str] = []
     for t in texts:
-        parts = _SENT_SPLIT.split(clean_evidence(t) if clean else (t or ""))
+        cleaned = clean_evidence(t) if clean else (t or "")
+        if clean and not cleaned.strip():
+            cleaned = (t or "").strip()               # cleaning emptied it -> keep raw rather than drop
+        parts = _SENT_SPLIT.split(cleaned)
         for i in range(0, len(parts), group):
             chunk = " ".join(p.strip() for p in parts[i:i + group]).strip()
             if chunk:
@@ -96,8 +99,11 @@ def ground_claims(verifier: Any, claims: list[str], sources: list[str], min_grou
             confidence = c.confidence
         else:
             deciding, _ = _best_entailment_for(verifier, holder, stmt, CONFIDENCE_FLOOR)
-            grounded = deciding.label == EntailmentLabel.ENTAIL and deciding.score >= CONFIDENCE_FLOOR
-            confidence = deciding.score
+            if deciding is None:                       # no evidence chunks -> cannot ground
+                grounded, confidence = False, 0.0
+            else:
+                grounded = deciding.label == EntailmentLabel.ENTAIL and deciding.score >= CONFIDENCE_FLOOR
+                confidence = deciding.score
         if grounded and numeric_guard and not numbers_supported(stmt, evidence_blob):
             grounded, confidence = False, min(confidence, 0.49)   # number not in evidence → demote
         details.append({"text": stmt, "grounded": grounded, "confidence": round(confidence, 4)})

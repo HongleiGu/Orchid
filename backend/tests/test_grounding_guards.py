@@ -26,6 +26,12 @@ def test_numeric_guard_demotes_wrong_number_even_when_nli_entails():
     assert right["fraction"] == 1.0            # number present -> grounded
 
 
+def test_ground_claims_handles_no_evidence():
+    # empty/emptied context must not crash -> claim simply ungrounded (regression)
+    res = ground_claims(StubNLI(), ["a claim with no evidence to check"], [], min_grounded=0.8)
+    assert res["fraction"] == 0.0 and res["details"][0]["grounded"] is False
+
+
 def test_numeric_guard_can_be_disabled():
     nli = StubNLI()
     res = ground_claims(nli, ["The market grew 40 percent in 2026."],
