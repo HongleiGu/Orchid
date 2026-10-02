@@ -406,6 +406,26 @@ Two small checks turn limitations recent work *acknowledges* into guards:
   whose numbers do not appear in the evidence is demoted. Digit-presence only;
   approximate (misses "40%" vs "0.4", unit changes) — refinement deferred.
 
+### Benchmark evaluation as a plugin framework (2026-10-02)
+
+Rigorous evaluation lives in a **plugin framework**, never wired into the runtime
+(nothing in `app.core` imports it). A benchmark is a plugin that loads its raw
+data and yields a common `EvalItem{claim, context[], gold(faithful), gold_abstain,
+task}`; a generic runner (`app/evidence/eval/benchmark_eval.py`) scores items with
+any scorer — our grounding checker, plain NLI, an LLM judge, or an offline stub —
+and reports hallucination-detection metrics (accuracy, balanced accuracy,
+hallucination P/R/F1, AUROC on P(faithful)). New benchmark = new plugin; runner and
+metrics unchanged.
+
+Four grounding/hallucination benchmarks are registered (all human-labelled,
+reducing to context→claim→faithful): **HalluMix** (`quotientai/HalluMix`),
+**RAGTruth** (`ParticleMedia/RAGTruth`), **TofuEval** (`amazon-science/tofueval`),
+**VeriGray** (summarization unfaithfulness — its *ambiguous* class maps to
+`gold_abstain`, the one set that tests our abstain/UNCERTAIN directly). Loaders are
+tolerant to field-name variants; exact formats (esp. VeriGray's source) are
+confirmed at fetch time. Framework + loaders tested on synthetic fixtures (7 tests);
+data fetch + first real runs are the next step.
+
 ## Open choices
 
 - Validation dimensions — is **demand / competition / willingness-to-pay /
