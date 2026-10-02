@@ -159,5 +159,32 @@ def verify_claim_decomposed(claim: Claim, nli: NLIVerifier, decomposer,
     return claim
 
 
+def verify_claim_formal(claim: Claim, nli: NLIVerifier, formal_verifier,
+                        router_threshold: float = 0.6) -> Claim:
+    """Route a claim: if it is a formally-checkable math claim (NLI zero-shot
+    router), attempt proof-level verification; a proved/refuted formal result is
+    authoritative (confidence 1.0). Otherwise — or if the formal engine abstains —
+    fall back to Layer-2 NLI entailment. The formalisation is recorded as a
+    structured check so the proof is auditable."""
+    from app.evidence.formal import is_math_claim
+    from app.evidence.schema import StructuredCheck
+
+    is_math, score = is_math_claim(claim.statement, nli, router_threshold)
+    if not is_math:
+        return verify_claim(claim, nli)
+
+    res = formal_verifier.verify(claim.statement)
+    claim.structured_checks.append(StructuredCheck(
+        kind=f"formal:{res.engine}",
+        passed=res.verdict == Verdict.SUPPORTED,
+        detail=f"{res.detail} | {res.formalization}".strip(" |"),
+    ))
+    if res.verdict in (Verdict.SUPPORTED, Verdict.REFUTED):
+        claim.verdict = res.verdict
+        claim.confidence = 1.0  # proof-level: a Z3/Lean verdict is not probabilistic
+        return claim
+    return verify_claim(claim, nli)  # formal abstained → entailment fallback
+
+
 def verify_claims(claims: list[Claim], nli: NLIVerifier) -> list[Claim]:
     return [verify_claim(c, nli) for c in claims]

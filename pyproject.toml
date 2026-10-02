@@ -46,6 +46,13 @@ evidence = [
     "huggingface-hub>=0.25",
 ]
 
+# Formal-verification layer (research). z3-solver is a pure pip wheel (no torch,
+# no Lean toolchain), so this extra installs and runs locally and in CI. The Lean
+# path (Numina-Lean-agent style, via MCP) is heavier and stays out of deps.
+formal = [
+    "z3-solver>=4.12",
+]
+
 [tool.setuptools.packages.find]
 where = ["backend"]   # finds `app` package inside backend/
 
