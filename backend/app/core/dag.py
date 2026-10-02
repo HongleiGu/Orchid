@@ -1069,6 +1069,16 @@ async def _run_grounding_check(output: AgentOutput, upstream: dict[str, AgentOut
             float(check.get("min_grounded", 0.8) or 0.8), decomposer,
             float(check.get("support_fraction", 0.5) or 0.5))
 
+    # Flywheel: record per-claim predictions to the outcome store (best-effort),
+    # to be reconciled against reality later and used to calibrate the threshold.
+    try:
+        from app.evidence.outcomes import default_store, record_grounding
+        store = default_store()
+        if store is not None and result.get("details"):
+            record_grounding(store, result, context={"check": "grounded"})
+    except Exception as exc:  # pragma: no cover - never break the check
+        logger.debug("grounding: outcome recording skipped (%s)", exc)
+
     out = _check_result(index, "grounded", "pass" if result["ok"] else "fail", result["reason"])
     out["fraction"] = result.get("fraction")
     out["ungrounded"] = result.get("ungrounded", [])

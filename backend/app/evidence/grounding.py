@@ -70,14 +70,18 @@ def ground_claims(verifier: Any, claims: list[str], sources: list[str], min_grou
     srcs = [Source(passage=s) for s in sources]
     holder = Claim(statement="", sources=srcs)
     ungrounded: list[str] = []
+    details: list[dict] = []   # per-claim {text, grounded, confidence} for calibration
     for stmt in claims:
         if decomposer is not None:
             c = verify_claim_decomposed(Claim(statement=stmt, sources=srcs), verifier,
                                         decomposer, support_fraction=support_fraction)
             grounded = c.verdict == Verdict.SUPPORTED
+            confidence = c.confidence
         else:
             deciding, _ = _best_entailment_for(verifier, holder, stmt, CONFIDENCE_FLOOR)
             grounded = deciding.label == EntailmentLabel.ENTAIL and deciding.score >= CONFIDENCE_FLOOR
+            confidence = deciding.score
+        details.append({"text": stmt, "grounded": grounded, "confidence": round(confidence, 4)})
         if not grounded:
             ungrounded.append(stmt)
     n = len(claims)
@@ -87,4 +91,5 @@ def ground_claims(verifier: Any, claims: list[str], sources: list[str], min_grou
               f"= {frac:.0%} (threshold {min_grounded:.0%}).")
     if ungrounded:
         reason += " Ungrounded claims: " + " | ".join(u[:90] for u in ungrounded[:5])
-    return {"ok": frac >= min_grounded, "reason": reason, "fraction": frac, "ungrounded": ungrounded}
+    return {"ok": frac >= min_grounded, "reason": reason, "fraction": frac,
+            "ungrounded": ungrounded, "details": details}
