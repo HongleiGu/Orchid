@@ -94,6 +94,11 @@ def _best_entailment_for(nli: NLIVerifier, claim: Claim, hypothesis: str,
 # (=1.0) tanks recall on abstractive, multi-source sentences; a majority is the
 # practical middle. Tunable; OR-60 calibrates it against the outcome store.
 SUPPORT_FRACTION = 0.5
+# Decomposition-faithfulness floor: an atom must be entailed by the ORIGINAL
+# statement, else the decomposer introduced it (fabrication / over-
+# decontextualization — the failure recent decompose-then-verify work reports).
+# Lenient (0.5) so only clearly-introduced atoms are dropped, not merely rephrased.
+FAITHFUL_FLOOR = 0.5
 # A contradiction only flips the verdict to REFUTED when it is strong AND actually
 # dominates the supporting atoms — otherwise a single negation-shaped atom (which
 # a 3-way MNLI model misreads) would wrongly refute a genuine claim.
@@ -118,8 +123,19 @@ def verify_claim_decomposed(claim: Claim, nli: NLIVerifier, decomposer,
         return claim
 
     claim.atoms = decomposer.decompose(claim.statement)
+
+    # (A) Decomposition-faithfulness round-trip: drop atoms the ORIGINAL statement
+    # does not entail — they were introduced by the decomposer. Reuses the NLI.
+    for a in claim.atoms:
+        if a.verifiable:
+            label, score = nli.entail(claim.statement, a.text)
+            if not (label == EntailmentLabel.ENTAIL and score >= FAITHFUL_FLOOR):
+                a.verifiable = False  # unfaithful → not graded
+
     verifiable = [a for a in claim.atoms if a.verifiable]
     if not verifiable:
+        # Over-decomposed / all atoms unfaithful → back off to the whole sentence,
+        # which keeps context (the pragmatic 2-level pyramid).
         return verify_claim(claim, nli)
 
     decided: list[Entailment] = []

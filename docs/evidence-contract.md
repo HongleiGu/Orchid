@@ -387,6 +387,25 @@ Still open for full product: L3 invariants, the constrained L4 judge, a zh NLI
 head (MiniCheck is English-only), a Postgres outcome-store table (behind the same
 interface), reconciliation signal/UI, and the C discover/validate loop.
 
+### Guards that resolve documented failure modes (2026 literature)
+
+Two small checks turn limitations recent work *acknowledges* into guards:
+
+- **Decomposition-faithfulness round-trip (A).** Decompose-then-verify work reports
+  the decomposer itself fabricates or over-decontextualizes (e.g. coreference-heavy
+  text: ~19% fail to parse, 84% of those invent a different identity). After
+  decomposing, each atom must be entailed by the *original statement* (reverse NLI)
+  or it is dropped as introduced. When all atoms are dropped (over-fragmented), the
+  check **backs off to the whole sentence**, which keeps context — a pragmatic
+  2-level granularity pyramid (the full article→chunk→atom pyramid, cf. TriQua, is
+  a deferred experiment). `FAITHFUL_FLOOR=0.5`, lenient so only clearly-introduced
+  atoms are cut.
+- **Numeric guard (B).** NLI is insensitive to single-digit numeric precision
+  ("15B" vs "16B") in near-identical context — a documented false-positive source,
+  and the exact class of our earlier coffee-vs-pet-food near-miss. A grounded claim
+  whose numbers do not appear in the evidence is demoted. Digit-presence only;
+  approximate (misses "40%" vs "0.4", unit changes) — refinement deferred.
+
 ## Open choices
 
 - Validation dimensions — is **demand / competition / willingness-to-pay /

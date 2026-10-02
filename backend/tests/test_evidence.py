@@ -188,3 +188,27 @@ def test_decomposition_with_no_verifiable_atoms_falls_back():
     d = _fixed_decomposer([{"text": "it is wonderful", "verifiable": False}])
     # No gradeable atom → whole-statement fallback, which the stub cannot entail.
     assert verify_claim_decomposed(c, NLI, d).verdict != Verdict.SUPPORTED
+
+
+def test_faithfulness_drops_atoms_the_statement_does_not_entail():
+    """Decomposition-faithfulness (A): an atom the ORIGINAL statement does not
+    entail was introduced by the decomposer and must not be graded."""
+    from app.evidence.verify import verify_claim_decomposed
+    c = claim("Users frequently request offline mode",
+              "Reviews show users frequently request offline mode.")
+    d = _fixed_decomposer([{"text": "Users frequently request offline mode", "verifiable": True},
+                           {"text": "The CEO resigned in 2026", "verifiable": True}])  # fabricated
+    out = verify_claim_decomposed(c, NLI, d)
+    graded = [a.text for a in out.atoms if a.verifiable]
+    assert "Users frequently request offline mode" in graded
+    assert "The CEO resigned in 2026" not in graded          # dropped as unfaithful
+    assert out.verdict == Verdict.SUPPORTED
+
+
+def test_all_atoms_unfaithful_backs_off_to_whole_sentence():
+    from app.evidence.verify import verify_claim_decomposed
+    stmt = "Users frequently request offline mode"
+    d = _fixed_decomposer([{"text": "The CEO resigned in 2026", "verifiable": True}])  # all fabricated
+    # back-off to whole sentence, which the source entails -> SUPPORTED
+    c = claim(stmt, "Reviews show users frequently request offline mode.")
+    assert verify_claim_decomposed(c, NLI, d).verdict == Verdict.SUPPORTED

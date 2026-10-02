@@ -59,16 +59,33 @@ def chunk_sources(texts: list[str], max_chunks: int = 40, group: int = 3, clean:
     return chunks[:max_chunks]
 
 
+_NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def numbers_supported(claim: str, evidence: str) -> bool:
+    """(B) A claim's numbers must actually appear in the evidence — NLI is
+    insensitive to single-digit numeric precision ("15B" vs "16B"), a documented
+    false-positive source. Digit-presence only: approximate (misses "40%" vs
+    "0.4", unit changes); refinement deferred."""
+    nums = {m.group().replace(",", "") for m in _NUM.finditer(claim)}
+    if not nums:
+        return True
+    hay = evidence.replace(",", "")
+    return all(n in hay for n in nums)
+
+
 def ground_claims(verifier: Any, claims: list[str], sources: list[str], min_grounded: float = 0.8,
-                  decomposer: Any = None, support_fraction: float = 0.5) -> dict:
+                  decomposer: Any = None, support_fraction: float = 0.5, numeric_guard: bool = True) -> dict:
     """Ground each claim against the evidence chunks. With a decomposer, each claim
     is split into atoms and grounded atom-by-atom against the full evidence set
-    (early-exit); otherwise the whole sentence is matched against the chunks."""
+    (early-exit); otherwise the whole sentence is matched against the chunks. With
+    numeric_guard, a claim whose numbers are absent from the evidence is demoted."""
     from app.evidence.schema import Claim, EntailmentLabel, Source, Verdict
     from app.evidence.verify import CONFIDENCE_FLOOR, _best_entailment_for, verify_claim_decomposed
 
     srcs = [Source(passage=s) for s in sources]
     holder = Claim(statement="", sources=srcs)
+    evidence_blob = " ".join(sources)
     ungrounded: list[str] = []
     details: list[dict] = []   # per-claim {text, grounded, confidence} for calibration
     for stmt in claims:
@@ -81,6 +98,8 @@ def ground_claims(verifier: Any, claims: list[str], sources: list[str], min_grou
             deciding, _ = _best_entailment_for(verifier, holder, stmt, CONFIDENCE_FLOOR)
             grounded = deciding.label == EntailmentLabel.ENTAIL and deciding.score >= CONFIDENCE_FLOOR
             confidence = deciding.score
+        if grounded and numeric_guard and not numbers_supported(stmt, evidence_blob):
+            grounded, confidence = False, min(confidence, 0.49)   # number not in evidence → demote
         details.append({"text": stmt, "grounded": grounded, "confidence": round(confidence, 4)})
         if not grounded:
             ungrounded.append(stmt)
