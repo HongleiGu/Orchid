@@ -53,6 +53,20 @@ def should_support(g: dict) -> bool:
     return g["gold"] == "supported"
 
 
+def bootstrap_ci(flags: list[bool], resamples: int = 2000, seed: int = 0) -> tuple[float, float]:
+    """95% bootstrap CI for the mean of a 0/1 list (e.g. per-item rejection)."""
+    import random
+    if not flags:
+        return 0.0, 0.0
+    rng = random.Random(seed)
+    n = len(flags)
+    means = []
+    for _ in range(resamples):
+        means.append(sum(flags[rng.randrange(n)] for _ in range(n)) / n)
+    means.sort()
+    return means[int(0.025 * resamples)], means[int(0.975 * resamples)]
+
+
 def run_judge(gold: list[dict], judge, name: str, nli_reject: float, nli_accept: float) -> None:
     """Run the LLM-judge baseline and print the head-to-head against Layer-2 NLI.
 
@@ -81,7 +95,9 @@ def run_judge(gold: list[dict], judge, name: str, nli_reject: float, nli_accept:
 
     j_reject = judge_rejected / len(reject_set) if reject_set else 0.0
     j_accept = accepted_ok / len(accept_set) if accept_set else 0.0
-    print(f"\njudge — mis-citations rejected : {judge_rejected}/{len(reject_set)} = {j_reject:.0%}   (NLI: {nli_reject:.0%})")
+    j_lo, j_hi = bootstrap_ci([not v.supported for _, v in reject_verdicts])
+    print(f"\njudge — mis-citations rejected : {judge_rejected}/{len(reject_set)} = {j_reject:.0%} "
+          f"[95% CI {j_lo:.0%}-{j_hi:.0%}]   (NLI: {nli_reject:.0%})")
     print(f"judge — genuine accepted       : {accepted_ok}/{len(accept_set)} = {j_accept:.0%}   (NLI: {nli_accept:.0%})")
     print(f"judge — {len(reject_set)+len(accept_set)} items in {elapsed:.1f}s")
 
@@ -225,9 +241,11 @@ def main(argv: list[str]) -> int:
         tag = "should SUPPORT" if gold_sup else "should reject "
         print(f"  {sub:14} {tag}  {ok}/{len(items)} = {ok/len(items):.0%}")
 
+    r_lo, r_hi = bootstrap_ci([not is_supported(v) for _, v in reject_set])
     print(f"\nbinary accuracy (supported vs not) : {binary_correct}/{len(rows)} = {binary_correct/len(rows):.0%}")
     print(f"genuine accepted (recall)          : {accepted_ok}/{len(accept_set)} = {nli_accept:.0%}")
-    print(f"MIS-CITATIONS rejected             : {rejected_ok}/{len(reject_set)} = {nli_reject:.0%}   (the headline metric)")
+    print(f"MIS-CITATIONS rejected             : {rejected_ok}/{len(reject_set)} = {nli_reject:.0%} "
+          f"[95% CI {r_lo:.0%}-{r_hi:.0%}]   (the headline metric)")
     print(f"\n{len(rows)} items in {elapsed:.1f}s ({elapsed/len(rows)*1000:.0f} ms/item)")
 
     if args.judge or args.judge_stub:

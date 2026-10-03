@@ -118,6 +118,41 @@ judge-authority-bias result (§3) that says *why* the external verifier must be
 mechanical, and formal routing for math. Others argue "use external grounding"; we
 supply the grounding mechanism for claims and show the LLM judge cannot be it.
 
+## 2.2 Related work
+
+**Attribution & citation evaluation.** The decompose-then-verify line —
+FActScore (2305.14251), SAFE, VeriScore (2406.19276) — reduces text to atomic
+claims and checks each; ALCE (2023) scores citation precision/recall by NLI; AttrScore
+and CAQA (2401.14640) frame attribution as a 3-way labelling; MiniCheck (EMNLP 2024,
+2404.10774) and LLM-AggreFact give an efficient grounded-factuality checker and
+leaderboard; CiteEval (ACL 2025, 2506.01829) argues NLI is a *suboptimal proxy* and
+proposes a principle-driven metric. All of these are **offline evaluators** of a
+fixed generation — not control-flow gates (§2.1).
+
+**LLM-as-a-judge (un)reliability.** Large-scale evaluation finds authority,
+verbosity, position and self-enhancement bias plus temperature sensitivity
+(*Reliability without Validity*, 2606.19544); our GaRAGe result (§3) is a sharp,
+labelled instance for the citation case specifically.
+
+**Agentic verification & governance.** Contract-gated action governance —
+ToolGate (Hoare pre/postconditions on tool calls), proof-carrying agent actions
+(2606.04104), provenance guardrails (2606.04990, 2608.12761) — gates *actions and
+data-flow*, not claim epistemics. Externally-grounded verification in loops
+(2607.25152) establishes the external-beats-self principle via a world-state oracle
+for software agents. We occupy the intersection they leave open (§2.1).
+
+**Convergent decompositions.** Concurrent 2026 work independently splits
+faithfulness along our exact axis — C2-Faith (ACL 2026) into *causality* (does a
+step follow — our warrant) and *coverage* (are inferences present — our grounds),
+and LogicReward (2512.18196) into *premise validity* + *logic validity*. We read
+this as corroboration of the fact-grounding vs inference-validity separation.
+
+**Neuro-symbolic / formal.** VeriFin (Z3 for financial claims) and NLI-as-theorem-
+proving (2025.acl-long.867) formalise then solve; but *logical soundness is not a
+reliable criterion* (2604.04177) and LLMs can *game formalization* (2604.19459) —
+autoformalization faithfulness, not solving, is the bottleneck. This is why our
+formal route is a *faithfulness-gated* option in a router, not a universal method.
+
 ## 3. Experiment 1 — judges accept mis-citations (GaRAGe)
 
 GaRAGe (Amazon, ACL 2025) pairs claims with human per-citation labels. We take the
