@@ -16,7 +16,8 @@ We argue citation-checking must instead be **mechanical** (NLI entailment),
 this as a contract check, route it into a real auto-research pipeline, and report
 three connected results on the public GaRAGe benchmark (ACL 2025) and in the
 pipeline: (1) on human-labelled mis-citations a constrained LLM judge rejects only
-**5%** where mechanical NLI rejects **80%**; (2) mechanical attribution is a
+**6%** [95% CI 1–10] where mechanical NLI rejects **80%** [70–88] (non-overlapping);
+(2) mechanical attribution is a
 **tunable precision/recall dial** (from 80%/21% to 34%/74% reject/accept) that the
 judge sits off entirely; (3) naive sentence-level grounding *degrades* a research
 pipeline, but **decomposition + full-evidence** lifts groundedness to the point the
@@ -160,17 +161,19 @@ cleanest unit — answer sentences citing exactly one source — and use GaRAGe'
 labels: 88 real mis-citations (`related-only`: on-topic but does **not** support
 the claim) and 92 genuine citations.
 
-| on 88 mis-citations / 92 genuine | mis-citations **rejected** | genuine **accepted** |
+| on 88 mis-citations / 92 genuine | mis-citations **rejected** (95% CI) | genuine **accepted** |
 |---|---|---|
-| mechanical NLI (`mDeBERTa`) | **80%** | 21% |
-| LLM judge (`gpt-4o-mini`) | **5%** | 90% |
+| mechanical NLI (`mDeBERTa`) | **80%** [70–88] | 21% |
+| LLM judge (`gpt-4o-mini`) | **6%** [1–10] | 92% |
 
-The judge accepts 84/88 on-topic-but-unsupportive citations, justifying each by the
-passage's topic ("*Source mentions…*", "*Source confirms…*") — authority bias,
-reproduced on real data. **The judge cannot be trusted to check citations.** But
-naive whole-sentence NLI is over-strict (21% genuine recall): the two fail as
-mirror images, which is the case *for* a layered, tunable contract rather than
-either method alone.
+The rejection CIs are **non-overlapping and far apart** (bootstrap, 2000 resamples
+over the fixed 88 mis-citations), so the gap is statistically unambiguous, not a
+small-sample artefact. The judge accepts 83/88 on-topic-but-unsupportive citations,
+justifying each by the passage's topic ("*Source mentions…*", "*Source
+confirms…*") — authority bias, reproduced on real human-labelled data. **The judge
+cannot be trusted to check citations.** But naive whole-sentence NLI is over-strict
+(21% genuine recall): the two fail as mirror images, which is the case *for* a
+layered, tunable contract rather than either method alone.
 
 ## 4. Experiment 2 — mechanical attribution is a tunable dial
 
@@ -183,10 +186,10 @@ The same 180-item set, varying model / decomposition / evidence scope:
 | `MiniCheck`, whole-sentence, cited-only | 88% | 23% |
 | `MiniCheck` + decomposition, cited-only | 44% | 67% |
 | `MiniCheck` + decomposition + full-evidence | 34% | **74%** |
-| *LLM judge (reference)* | *5%* | *90%* |
+| *LLM judge (reference)* | *6%* | *92%* |
 
 Each lever slides one precision/recall frontier monotonically. **The judge sits
-off this frontier** (5%/90%) and cannot be dialled toward rejection. The ablation
+off this frontier** (6%/92%) and cannot be dialled toward rejection. The ablation
 isolates the dominant lever: both models at whole-sentence are strict and
 low-recall (`mDeBERTa` 21%, `MiniCheck` 23%); it is **decomposition**, not the
 model swap, that unlocks recall (`MiniCheck` 23%→67%) — the unit of attribution
@@ -259,6 +262,12 @@ NLI, not a replacement.
 - **Judge decomposer.** The decomposer is an LLM; it only *extracts* (never sees
   the source, never decides support), so judge bias cannot re-enter — but it adds
   token cost to the check.
+- **Checker contamination.** MiniCheck's training evaluation (LLM-AggreFact)
+  *includes* RAGTruth/TofuEval, so our checker is not strictly zero-shot on those;
+  HalluMix and VeriGray (2025) post-date it and are the clean ones.
+- **Sample size.** The external-benchmark numbers (§6-adjacent, design note) are
+  small CPU subsamples, single-seed; only the GaRAGe headline (§3) carries CIs.
+  Full-set, multi-seed runs need a GPU — a scale, not a method, gap.
 
 ## 8. Conclusion
 
@@ -269,13 +278,27 @@ evidence) matches how writers compose; and its boundary — citation identity �
 itself cheaply checkable. The judge's role is relevance and framing, never
 citations.
 
+## Reproducibility
+
+All runs are CPU, in the `Dockerfile.evidence` image via `uv`; models are frozen
+(no training). Headline (§3, with CIs):
+`python -m app.evidence.eval.run --benchmark garage --limit 180 --judge`
+(mDeBERTa NLI + `gpt-4o-mini` judge). Dial (§4): add `--minicheck`, `--decompose`,
+`--full-evidence`. Pipeline (§5): `app.evidence.eval.research_grounding` and
+`app.evidence.eval.gate_compare`. External benchmarks: the plugin framework
+(`app.evidence.eval.benchmark_eval --benchmark {hallumix,ragtruth,verigray}`).
+Bootstrap CIs: 2000 resamples over the fixed item set (`run.py:bootstrap_ci`).
+Code + full run logs: `docs/evidence-contract.md`.
+
 ## References
 
 AFC survey 2108.11896 · VeriScore 2406.19276 · ALCE · MiniCheck (EMNLP 2024)
 2404.10774 · GaRAGe (ACL 2025) · Deep Research Agents 2506.18096 / 2508.12752 ·
 Verification Gap 2608.05179 · Cited but Not Verified 2605.06635 · CiteCheck
 2605.27700 · Reliability without Validity 2606.19544 · Do LLM Attribution Metrics
-Transfer 2606.23915 · TriQua 2608.05228 · DnDScore 2412.13175.
+Transfer 2606.23915 · TriQua 2608.05228 · DnDScore 2412.13175 · CiteEval (ACL 2025)
+2506.01829 · C2-Faith (ACL 2026) 2603.05167 · LogicReward 2512.18196 · Logical
+Soundness is not a Reliable Criterion 2604.04177 · Do LLMs Game Formalization? 2604.19459.
 
 *Agentic-verification neighbours (positioned against in §2.1):* ToolGate
 (contract-gated tool execution) 2026.findings-acl.470 · Proof-Carrying Agent
