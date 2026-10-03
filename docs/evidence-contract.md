@@ -423,8 +423,31 @@ reducing to context→claim→faithful): **HalluMix** (`quotientai/HalluMix`),
 **VeriGray** (summarization unfaithfulness — its *ambiguous* class maps to
 `gold_abstain`, the one set that tests our abstain/UNCERTAIN directly). Loaders are
 tolerant to field-name variants; exact formats (esp. VeriGray's source) are
-confirmed at fetch time. Framework + loaders tested on synthetic fixtures (7 tests);
-data fetch + first real runs are the next step.
+confirmed at fetch time. Framework + loaders tested on synthetic fixtures;
+loaders verified against fetched data (HalluMix 6500, RAGTruth 17790, VeriGray 2018).
+
+**First real runs (2026-10-03, MiniCheck whole-sentence, small CPU subsamples):**
+
+| benchmark | n | claim unit | acc | balanced | halluc-F1 | AUROC |
+|---|---|---|---|---|---|---|
+| HalluMix | 80 | short answer | 64% | 61% | 73% | **0.706** |
+| HalluMix (+decompose) | 60 | " | 73% | 73% | — | **0.727** |
+| VeriGray | 60 | summary sentence | 45% | 63% | 38% | **0.660** |
+| RAGTruth | 50 | full response | 38% | 50% | 49% | **0.462** |
+
+Small, single-seed subsamples (MiniCheck-large is CPU-bound; full/multi-seed is a
+GPU follow-up). The pattern is the point and **independently validates two design
+choices**: (1) *decomposition* — it lifts HalluMix (0.706->0.727), and RAGTruth
+fails *without* it (AUROC 0.462) because the "claim" is a whole multi-sentence
+response that no single chunk entails (the decomposition lesson, on external data);
+(2) *calibration* — the fixed 0.6 threshold over-flags everywhere (hallucination
+recall ~88-93% but low precision / faithful-F1), i.e. real signal
+(AUROC > 0.5 where the unit is atomic) at a mis-set operating point — exactly what
+the outcome-store threshold fit is for. (TofuEval pending its MediaSum/MeetingBank
+doc-join; it ships only doc_ids.)
+
+Infra note: run benchmarks one at a time — a killed `docker run` leaves the
+container alive, and stacked zombies split the CPU and starve later runs.
 
 ## Open choices
 
